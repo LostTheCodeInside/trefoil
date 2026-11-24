@@ -14,6 +14,9 @@
 # before anything is published, a dry run included. If it fails, nothing goes out:
 #   RELEASE_CHECK=./my-scan.sh ./scripts/release.sh
 #
+# The APKs are built in a checkout of HEAD at $WORK rather than here: the Dart compiler
+# writes the project's path into the app, and this one names whoever built it.
+#
 # Needs the GitHub CLI (`gh`), signed in with write access to $REPO.
 #
 # The release key never leaves this machine. GitHub only ever holds signed APKs, and
@@ -28,6 +31,7 @@ BASE_URL="https://github.com/$REPO/releases/latest/download"
 RELEASE_CERT_SHA256="253e25a04c64afde913dd82f5e13470e3d95b262589728935be8980d64758c33"
 ABIS=(arm64-v8a armeabi-v7a x86_64)
 STAGE="build/release"
+WORK="${RELEASE_WORK_DIR:-/tmp/trefoil-release}"
 
 die() {
   echo "release: $*" >&2
@@ -39,6 +43,8 @@ dry_run=0
 
 [[ -f android/key.properties ]] ||
   die "android/key.properties is missing; a debug-signed build can never update an installed copy"
+[[ -f android/app/libs/libcores.aar ]] ||
+  die "android/app/libs/libcores.aar is missing; run ./scripts/build-cores.sh"
 [[ -z "$(git status --porcelain)" ]] || die "commit or stash first, so the release matches a commit"
 
 version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml)"
@@ -59,7 +65,15 @@ fi
 
 # Nothing goes out over a build that is not older than it.
 live_json="$(mktemp)"
-trap 'rm -f "$live_json"' EXIT
+work_made=0
+cleanup() {
+  rm -f "$live_json"
+  if ((work_made)); then
+    git worktree remove --force "$WORK" 2>/dev/null || rm -rf "$WORK"
+    git worktree prune
+  fi
+}
+trap cleanup EXIT
 status="$(curl -sSL --max-time 20 -o "$live_json" -w '%{http_code}' "$BASE_URL/latest.json" || true)"
 case "$status" in
   200) live="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("build", 0)))' "$live_json")" ;;
@@ -72,13 +86,24 @@ tools="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/*/ 2>/dev/null |
 [[ -x "${tools}apksigner" && -x "${tools}aapt2" ]] ||
   die "Android build-tools (apksigner, aapt2) not found; set ANDROID_HOME"
 
-flutter build apk --release --split-per-abi
+# mkdir fails on a directory that is already there, so nobody else's is ever built in.
+mkdir -m 700 "$WORK" || die "$WORK is in the way; remove it, or set RELEASE_WORK_DIR"
+work_made=1
+git worktree add --quiet --detach "$WORK" "$commit"
+# Linked rather than copied: the key settings stay in the one place they are kept.
+mkdir -p "$WORK/android/app/libs"
+ln -s "$PWD/android/key.properties" "$WORK/android/key.properties"
+ln -s "$PWD/android/app/libs/libcores.aar" "$WORK/android/app/libs/libcores.aar"
+(cd "$WORK" && flutter build apk --release --split-per-abi)
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 for abi in "${ABIS[@]}"; do
-  src="build/app/outputs/flutter-apk/app-$abi-release.apk"
+  src="$WORK/build/app/outputs/flutter-apk/app-$abi-release.apk"
   [[ -f "$src" ]] || die "$src was not built"
+  # Counted rather than `grep -q`, which stops reading early and fails the pipe.
+  leaks="$(unzip -p "$src" | grep -acF -- "$HOME/" || true)"
+  [[ "$leaks" == 0 ]] || die "$src contains the path of a home directory ($HOME)"
   "${tools}apksigner" verify --print-certs "$src" |
     grep -qi "certificate SHA-256 digest: $RELEASE_CERT_SHA256" ||
     die "$src is not signed with the release key"
