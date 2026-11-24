@@ -82,6 +82,8 @@ void main() {
   }
 }
 
+const _uuid = '11111111-2222-3333-4444-555555555555';
+
 /// Lines that mean the config is wrong, as opposed to the network being absent.
 ///
 /// Deliberately a small, specific list. Matching anything that merely looks like an
@@ -413,6 +415,52 @@ Map<String, Map<String, Object?>> _cases() {
       final proxies = ClashConfig.parse(_clashBadPlugin);
       return ConfigBuilder(routing: const RoutingSettings())
           .buildMap(proxies.first, servers: proxies);
+    }(),
+
+    // One of each kind the core refuses the whole config over, beside one that works.
+    'every kind of server the core refuses, beside one that works': () {
+      final bad = [
+        for (final link in const [
+          'ss://bm90LWEtY2lwaGVyOnB3@192.0.2.9:8388#cipher',
+          'ss://2022-blake3-aes-256-gcm:c2hvcnQ%3D@192.0.2.9:8388#key',
+          'ss://YWVzLTEyOC1nY206cHc@192.0.2.9:8388?plugin=obfs-local%3Bobfs%3Dquic#obfs',
+          'vless://$_uuid@192.0.2.9:443?security=reality&sni=a.example&pbk=short#reality',
+          'vless://$_uuid@192.0.2.9:443?security=reality&sni=a.example'
+              '&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=00112233445566778899#sid',
+          'vless://$_uuid@192.0.2.9:443?flow=xtls-rprx-direct&security=tls#flow',
+          'vless://$_uuid@192.0.2.9:443?type=ws&path=%2F100%25#path',
+          'tuic://me:pw@192.0.2.9:443#uuid',
+          'tuic://$_uuid:pw@192.0.2.9:443?congestion_control=reno#congestion',
+          'hysteria2://pw@192.0.2.9:443?obfs=xor&obfs-password=x#obfs2',
+        ])
+          ShareLink.parse(link)!,
+      ];
+      assert(bad.every((server) => !server.isUsable));
+      return const ConfigBuilder(routing: RoutingSettings())
+          .buildMap(trojan, servers: [...bad, trojan]);
+    }(),
+
+    // Accepted by the checks above, so the core had better accept them too.
+    'the formats that used to be read wrong': () {
+      final servers = [
+        for (final link in const [
+          'hysteria2://pw@192.0.2.9:443,5000-6000/?sni=a.example#hop',
+          'ss://2022-blake3-aes-128-gcm:AAAAAAAAAAAAAAAAAAAAAA%3D%3D@192.0.2.9:8388#s2022',
+          'ss://YWVzLTEyOC1nY206cHc@192.0.2.9:8388/?plugin=obfs-local%3Bobfs%3Dtls'
+              '%3Bobfs-host%3Da.example#obfs',
+          'vless://$_uuid@192.0.2.9:80?type=tcp&headerType=http&host=a.example&path=%2Fx#http',
+          'vless://$_uuid@192.0.2.9:443?security=reality&sni=a.example&sid='
+              '&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI+T4E7RoLJS0=&fp=netscape#plus',
+          'hysteria://192.0.2.9:443?auth=a&obfs=xplus&obfsParam=x&upmbps=10&downmbps=50#h1',
+        ])
+          ShareLink.parse(link)!,
+      ];
+      assert(servers.every((server) => server.isUsable));
+      return const ConfigBuilder(
+        routing: RoutingSettings(),
+        remoteDns: 'https://dns.example:8443/abc123',
+        directDns: '[2606:4700:4700::1111]:53',
+      ).buildMap(servers.first, servers: servers);
     }(),
 
     // Both loopback members at once: one for Xray, one for AmneziaWG, beside a server

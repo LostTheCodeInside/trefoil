@@ -95,6 +95,8 @@ class _LogLine extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Text(
         entry.message,
+        // What the core wrote, in the order it wrote it, whatever the app's language.
+        textDirection: TextDirection.ltr,
         style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 12,

@@ -130,7 +130,9 @@ proxies:
 ''');
       // Clash's `obfs` is simple-obfs, which sing-box knows as obfs-local.
       expect(ss.single.json['plugin'], 'obfs-local');
-      expect(ss.single.json['plugin_opts'], 'mode=tls;host=bing.com');
+      // And sing-box's reads its own option names, not Clash's: under those it fell
+      // back to plain HTTP obfuscation whatever the server expected.
+      expect(ss.single.json['plugin_opts'], 'obfs=tls;obfs-host=bing.com');
     });
 
     test('skip-cert-verify survives, because the document is the user\'s own', () {
@@ -207,7 +209,7 @@ proxies:
      plugin: obfs, plugin-opts: {mode: tls, host: www.example.com}}
 ''').single.json;
       expect(json['plugin'], 'obfs-local');
-      expect(json['plugin_opts'], contains('mode=tls'));
+      expect(json['plugin_opts'], contains('obfs=tls'));
     });
 
     test('v2ray-plugin passes through', () {

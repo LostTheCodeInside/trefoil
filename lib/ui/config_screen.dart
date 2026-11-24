@@ -61,6 +61,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
               scrollDirection: Axis.horizontal,
               child: SelectableText(
                 snapshot.data!,
+                textDirection: TextDirection.ltr,
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12, height: 1.4),
               ),
             ),

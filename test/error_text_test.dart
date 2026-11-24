@@ -5,9 +5,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:trefoil/core/action_error.dart';
 import 'package:trefoil/core/profile/profile_store.dart';
+import 'package:trefoil/core/profile/routing.dart';
+import 'package:trefoil/core/profile/server_check.dart';
 import 'package:trefoil/core/tunnel_channel.dart';
 import 'package:trefoil/l10n/app_localizations.dart';
 import 'package:trefoil/ui/error_text.dart';
+import 'package:trefoil/ui/l10n_ext.dart';
 
 /// Failures are said in the user's language.
 ///
@@ -80,5 +83,66 @@ void main() {
       if (locale.languageCode == 'en') continue;
       expect(names('values-${locale.languageCode}'), base, reason: locale.languageCode);
     }
+  });
+
+  // These were English inside the app's other languages: a list's name, and why a
+  // server cannot be used.
+  group('in every language', () {
+    final languages = [
+      for (final locale in AppLocalizations.supportedLocales) lookupAppLocalizations(locale),
+    ];
+
+    test('every list has a name and a description', () {
+      for (final l10n in languages) {
+        for (final preset in RuleSetPreset.catalog) {
+          expect(preset.label(l10n), isNot(preset.id), reason: '${l10n.localeName} ${preset.id}');
+          expect(preset.description(l10n), isNotEmpty, reason: '${l10n.localeName} ${preset.id}');
+        }
+        final names = {for (final preset in RuleSetPreset.catalog) preset.label(l10n)};
+        expect(names, hasLength(RuleSetPreset.catalog.length), reason: l10n.localeName);
+      }
+    });
+
+    test('every reason a server is refused is a sentence, with what it is about', () {
+      const codes = [
+        ServerProblem.plugin,
+        ServerProblem.transport,
+        ServerProblem.insecureTls,
+        ServerProblem.port,
+        ServerProblem.cipher,
+        ServerProblem.flow,
+        ServerProblem.key,
+        ServerProblem.fingerprint,
+        ServerProblem.obfs,
+        ServerProblem.congestion,
+        ServerProblem.path,
+      ];
+      for (final l10n in languages) {
+        final said = {for (final code in codes) describeProblem(l10n, ServerProblem(code, 'XYZ'))};
+        expect(said, hasLength(codes.length), reason: l10n.localeName);
+        expect(said.intersection(codes.toSet()), isEmpty, reason: l10n.localeName);
+      }
+      for (final l10n in languages) {
+        expect(
+          describeProblem(l10n, const ServerProblem(ServerProblem.cipher, 'XYZ')),
+          contains('XYZ'),
+        );
+      }
+    });
+
+    test('a reason this version does not know is shown as it is', () {
+      expect(describeProblem(en, const ServerProblem('', 'In words')), 'In words');
+      expect(describeProblem(en, const ServerProblem('new-code')), 'new-code');
+    });
+
+    test('lists that would not download are named, not numbered', () {
+      const error = ActionError(
+        ActionErrorKind.ruleSetsUnavailable,
+        subject: 'geoip-id,geosite-cn',
+      );
+      final text = describeError(id, error);
+      expect(text, allOf(contains(id.presetIndonesiaIps), contains(id.presetChinaSites)));
+      expect(text, isNot(contains('geoip')));
+    });
   });
 }

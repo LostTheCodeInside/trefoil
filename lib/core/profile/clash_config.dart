@@ -1,6 +1,8 @@
 import 'package:yaml/yaml.dart';
 
 import 'outbound.dart';
+import 'server_check.dart';
+import 'share_link.dart';
 
 /// Reads the `proxies:` list out of a Clash or Clash.Meta configuration.
 ///
@@ -62,8 +64,9 @@ class ClashConfig {
 
   static Outbound? _proxy(Map<String, Object?> p) {
     final server = _str(p['server']);
+    // Out of range is as unusable as absent, and unlike that it fails the whole config.
     final port = _int(p['port']);
-    if (server.isEmpty || port == 0) return null;
+    if (server.isEmpty || port < 1 || port > 65535) return null;
 
     final name = _str(p['name']).isEmpty ? server : _str(p['name']);
     final type = _str(p['type']).toLowerCase();
@@ -90,6 +93,13 @@ class ClashConfig {
     final chain = <Map<String, Object?>>[];
     final unsupported = <String>[];
     _applyPlugin(p, built, chain, unsupported, server, port);
+    if (const {'vmess', 'vless', 'trojan'}.contains(type)) {
+      final network = _str(p['network']).toLowerCase();
+      // Imported as plain TCP, these would be servers that look fine and never answer.
+      if (!const {'', 'tcp', 'raw', 'ws', 'grpc', 'h2', 'http', 'httpupgrade'}.contains(network)) {
+        unsupported.add('${ServerProblem(ServerProblem.transport, network)}');
+      }
+    }
 
     return Outbound(
       tag: name,
@@ -122,14 +132,39 @@ class ClashConfig {
     switch (name) {
       case 'obfs' || 'simple-obfs':
         json['plugin'] = 'obfs-local';
-        if (options.isNotEmpty) json['plugin_opts'] = options;
+        // Clash says `mode` and `host`; the plugin only answers to its own names, and
+        // ignores any other.
+        final renamed = {
+          for (final MapEntry(:key, :value) in options.entries)
+            switch (key) {
+              'mode' => 'obfs',
+              'host' => 'obfs-host',
+              _ => key,
+            }: value,
+        };
+        if (renamed.isNotEmpty) json['plugin_opts'] = _joined(renamed);
       case 'v2ray-plugin':
         json['plugin'] = 'v2ray-plugin';
-        if (options.isNotEmpty) json['plugin_opts'] = options;
+        final known = {
+          for (final MapEntry(:key, :value) in options.entries)
+            if (const {'mode', 'host', 'path'}.contains(key))
+              key: value
+            // Its presence is what turns it on, whatever it is set to.
+            else if (key == 'tls' && value == 'true')
+              key: ''
+            // A number, where Clash has a switch.
+            else if (key == 'mux')
+              key: switch (value) {
+                'true' => '1',
+                'false' => '0',
+                _ => value,
+              },
+        };
+        if (known.isNotEmpty) json['plugin_opts'] = _joined(known);
       case 'shadow-tls':
         _shadowTls(p, json, chain, server, port);
       default:
-        unsupported.add('the $name plugin');
+        unsupported.add('${ServerProblem(ServerProblem.plugin, name)}');
     }
   }
 
@@ -217,16 +252,16 @@ class ClashConfig {
         final options = reality.cast<String, Object?>();
         tls['reality'] = {
           'enabled': true,
-          if (_str(options['public-key']).isNotEmpty) 'public_key': _str(options['public-key']),
+          if (_str(options['public-key']).isNotEmpty)
+            'public_key': ServerCheck.realityKey(_str(options['public-key'])),
           if (_str(options['short-id']).isNotEmpty) 'short_id': _str(options['short-id']),
         };
         // REALITY without a uTLS fingerprint is trivially distinguishable, which is
         // the one thing it exists to prevent.
+        final fingerprint = ServerCheck.fingerprint(_str(p['client-fingerprint']));
         tls['utls'] = {
           'enabled': true,
-          'fingerprint': _str(p['client-fingerprint']).isEmpty
-              ? 'chrome'
-              : _str(p['client-fingerprint']),
+          'fingerprint': fingerprint.isEmpty ? 'chrome' : fingerprint,
         };
       }
       json['tls'] = tls;
@@ -251,6 +286,8 @@ class ClashConfig {
     'type': 'hysteria2',
     'server': server,
     'server_port': port,
+    if (ShareLink.portRanges(_str(p['ports'])) case final ranges when ranges.isNotEmpty)
+      'server_ports': ranges,
     'password': _str(p['password']),
     if (_mbps(p['up']) > 0) 'up_mbps': _mbps(p['up']),
     if (_mbps(p['down']) > 0) 'down_mbps': _mbps(p['down']),
@@ -263,6 +300,8 @@ class ClashConfig {
     'type': 'hysteria',
     'server': server,
     'server_port': port,
+    if (ShareLink.portRanges(_str(p['ports'])) case final ranges when ranges.isNotEmpty)
+      'server_ports': ranges,
     // Clash spells this either way depending on its age.
     'auth_str': _str(p['auth-str']).isEmpty ? _str(p['auth_str']) : _str(p['auth-str']),
     // Emitted even when the document omits them: sing-box refuses to build a
@@ -391,7 +430,7 @@ class ClashConfig {
     // Clash carries the name under either key depending on the protocol.
     final name = _str(p['servername']).isNotEmpty ? _str(p['servername']) : _str(p['sni']);
     final alpn = p['alpn'];
-    final fingerprint = _str(p['client-fingerprint']);
+    final fingerprint = ServerCheck.fingerprint(_str(p['client-fingerprint']));
     return {
       'enabled': true,
       'server_name': name.isEmpty ? server : name,
@@ -404,16 +443,21 @@ class ClashConfig {
     };
   }
 
-  /// Clash nests plugin options in a map; sing-box takes them as one string.
-  static String _pluginOptions(Map<String, Object?> p) {
+  /// The plugin's options that hold a single value. Clash nests a map in some, such as
+  /// websocket headers, which a plugin has no way to be told.
+  static Map<String, String> _pluginOptions(Map<String, Object?> p) {
     final options = p['plugin-opts'];
-    if (options is! Map) return '';
-    final map = options.cast<String, Object?>();
-    return [
-      for (final entry in map.entries)
-        if (_str(entry.value).isNotEmpty) '${entry.key}=${_str(entry.value)}',
-    ].join(';');
+    if (options is! Map) return const {};
+    return {
+      for (final MapEntry(:key, :value) in options.entries)
+        if (value is! Map && value is! List && _str(value).isNotEmpty) '$key': _str(value),
+    };
   }
+
+  /// sing-box takes a plugin's options as one string.
+  static String _joined(Map<String, String> options) =>
+      [for (final MapEntry(:key, :value) in options.entries) value.isEmpty ? key : '$key=$value']
+          .join(';');
 
   // ---- scalars -----------------------------------------------------------
 

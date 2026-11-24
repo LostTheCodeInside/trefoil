@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'outbound.dart';
+import 'share_link.dart';
 
 /// Reads WireGuard servers, from either a share link or a `.conf` file.
 ///
@@ -203,7 +204,7 @@ class WireGuardConfig {
   static Outbound? parseLink(String link, {String? name}) {
     final uri = Uri.tryParse(link);
     if (uri == null || uri.host.isEmpty) return null;
-    final q = uri.queryParameters;
+    final q = ShareLink.query(uri);
 
     // Some clients put the private key in the query instead of the userinfo.
     final privateKey = _decodeKey(

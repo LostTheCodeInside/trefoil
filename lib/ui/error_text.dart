@@ -1,5 +1,8 @@
 import '../core/action_error.dart';
+import '../core/profile/routing.dart';
+import '../core/profile/server_check.dart';
 import '../l10n/app_localizations.dart';
+import 'l10n_ext.dart';
 
 /// Says a failure in the user's language.
 ///
@@ -12,14 +15,20 @@ String describeError(AppLocalizations l10n, Object error) {
   final lead = switch (e.kind) {
     ActionErrorKind.noServer => l10n.errorNoServer,
     // Already carries its detail in the sentence.
-    ActionErrorKind.serverUnsupported => l10n.errorServerUnsupported(e.subject, e.detail),
+    ActionErrorKind.serverUnsupported => l10n.errorServerUnsupported(e.subject, switch (e.problem) {
+      final ServerProblem problem => describeProblem(l10n, problem),
+      null => e.detail,
+    }),
     ActionErrorKind.xrayUnconvertible => l10n.errorXrayUnconvertible(e.subject),
     ActionErrorKind.vpnPermission => l10n.errorVpnPermission,
     ActionErrorKind.configRejected => l10n.errorConfigRejected,
     ActionErrorKind.warpNotOn => l10n.errorWarpNotOn,
     ActionErrorKind.warpRegistration => l10n.errorWarpRegistration,
     ActionErrorKind.saveFailed => l10n.errorSaveFailed,
-    ActionErrorKind.ruleSetsUnavailable => l10n.errorRuleSetsUnavailable(e.subject),
+    ActionErrorKind.profileDamaged => l10n.errorProfileDamaged,
+    ActionErrorKind.ruleSetsUnavailable => l10n.errorRuleSetsUnavailable(
+      e.subject.split(',').map((id) => _listName(l10n, id)).join(', '),
+    ),
     ActionErrorKind.notALink => l10n.errorNotALink,
     ActionErrorKind.wireGuardIncomplete => l10n.errorWireGuardIncomplete,
     ActionErrorKind.subscriptionRefused => l10n.errorSubscriptionRefused(e.subject),
@@ -55,3 +64,23 @@ String describeError(AppLocalizations l10n, Object error) {
   };
   return tail.isEmpty ? lead : l10n.errorWithDetail(lead, tail);
 }
+
+String _listName(AppLocalizations l10n, String id) => RuleSetPreset.byId(id)?.label(l10n) ?? id;
+
+/// Why a server cannot be used, as the end of a sentence that says it cannot.
+String describeProblem(AppLocalizations l10n, ServerProblem problem) => switch (problem.code) {
+  ServerProblem.plugin => l10n.problemPlugin(problem.detail),
+  ServerProblem.transport => l10n.problemTransport(problem.detail),
+  ServerProblem.insecureTls => l10n.problemInsecureTls,
+  ServerProblem.port => l10n.problemPort,
+  ServerProblem.cipher => l10n.problemCipher(problem.detail),
+  ServerProblem.flow => l10n.problemFlow(problem.detail),
+  ServerProblem.key => l10n.problemKey,
+  ServerProblem.fingerprint => l10n.problemFingerprint(problem.detail),
+  ServerProblem.obfs => l10n.problemObfs(problem.detail),
+  ServerProblem.congestion => l10n.problemCongestion(problem.detail),
+  ServerProblem.path => l10n.problemPath,
+  // From a version that knows more reasons, or a sentence stored before there were
+  // codes. Shown as it is.
+  _ => problem.detail.isEmpty ? problem.code : problem.detail,
+};

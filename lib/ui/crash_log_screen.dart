@@ -71,6 +71,7 @@ class _CrashLogScreenState extends State<CrashLogScreen> {
             padding: EdgeInsets.fromLTRB(16, 16, 16, bottomInset(context, extra: 16)),
             child: SelectableText(
               snapshot.data!,
+              textDirection: TextDirection.ltr,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12, height: 1.4),
             ),
           );

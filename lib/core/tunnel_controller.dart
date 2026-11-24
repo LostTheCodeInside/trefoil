@@ -97,7 +97,22 @@ class TunnelController extends ChangeNotifier {
   /// Guards the late arrival of anything asynchronous: notifying after dispose
   /// throws, and reading a file is slower than a screen can be closed.
   bool _disposed = false;
-  TunnelStatus get status => _status;
+
+  /// What the native side last reported, or "starting" from the moment the user asked:
+  /// fetching rule sets and the permission dialog come before the tunnel does, and a
+  /// button that still reads "Connect" through them is a button that looks dead.
+  TunnelStatus get status => isPreparing ? _preparingStatus : _status;
+
+  static const _preparingStatus = TunnelStatus(stage: TunnelStage.starting);
+
+  /// Connecting, with the tunnel itself not started yet. Still the app's to call off.
+  bool get isPreparing => _connecting && _status.stage == TunnelStage.stopped;
+
+  bool _connecting = false;
+
+  /// Goes up with every start and every stop, so one that was overtaken while it waited
+  /// for something can tell, and leave the rest to the one that overtook it.
+  int _attempt = 0;
 
   // Views, not copies. These are read during build, and `List.unmodifiable` copies
   // the whole list every time it is called -- which for a subscription with a few
@@ -177,7 +192,7 @@ class TunnelController extends ChangeNotifier {
     if (value) {
       unawaited(refreshExitIp());
     } else {
-      exitIp.value = null;
+      _forgetExitIp();
     }
   }
 
@@ -200,18 +215,25 @@ class TunnelController extends ChangeNotifier {
     }
   }
 
-  bool _checkingExitIp = false;
+  /// Only the latest lookup may answer, and only while what it asked about is still so.
+  int _exitIpLookup = 0;
 
   /// Looks up the exit address. Safe to call when disconnected; it simply reports
   /// whatever route the app currently has.
+  ///
+  /// The answer takes seconds, which is long enough to disconnect or to change server.
+  /// One that comes back after that is an address nothing leaves through any more.
   Future<void> refreshExitIp() async {
-    if (_checkingExitIp) return;
-    _checkingExitIp = true;
-    try {
-      exitIp.value = await const ExitIpProbe().lookup();
-    } finally {
-      _checkingExitIp = false;
-    }
+    final lookup = ++_exitIpLookup;
+    final found = await const ExitIpProbe().lookup();
+    if (_disposed || lookup != _exitIpLookup) return;
+    exitIp.value = found;
+  }
+
+  /// Forgets the exit address: the way out has changed, or there is none.
+  void _forgetExitIp() {
+    _exitIpLookup++;
+    exitIp.value = null;
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
@@ -352,7 +374,15 @@ class TunnelController extends ChangeNotifier {
     return null;
   }
 
-  bool get canConnect => selected != null && selected!.isUsable && !_status.stage.isBusy;
+  /// Whether the connect button does anything: turn the tunnel off, call off a connect
+  /// that has not started it yet, or connect to a server that can be used.
+  ///
+  /// A running tunnel can always be turned off. The server it runs on may since have
+  /// been replaced in the list by one that cannot be used, or removed altogether.
+  bool get canToggle {
+    if (_status.stage.isActive || isPreparing) return true;
+    return !_status.stage.isBusy && (selected?.isUsable ?? false);
+  }
 
   /// Whether this app's own traffic goes through the tunnel.
   ///
@@ -412,6 +442,7 @@ class TunnelController extends ChangeNotifier {
     themeModeListenable.value = _themeModeOf(_data.themeModeName);
     _applyCrashReports();
     _loading = false;
+    if (_data.damaged) _fail(const ActionError(ActionErrorKind.profileDamaged));
     notifyListeners();
 
     // Seed from the native side first: the tunnel may already be running from a
@@ -437,12 +468,14 @@ class TunnelController extends ChangeNotifier {
         _signal(groupsChanged);
       }
       if (value.stage != previous.stage) {
+        _forgetExitIp();
         if (value.stage.isActive) {
           // Deliberately after the tunnel reports started rather than on the first
           // byte: the answer is only meaningful once traffic can actually flow.
           if (_data.autoCheckIp) unawaited(refreshExitIp());
         } else {
-          exitIp.value = null;
+          // The core that was measuring is gone, and its answer with it.
+          _testing = false;
           // The service flushes what it has when the tunnel stops, so this is the
           // moment the totals are complete.
           unawaited(refreshServerUsage());
@@ -464,10 +497,17 @@ class TunnelController extends ChangeNotifier {
       // what the reports are for when a switch did not take.
       if (_testing || !listEquals(value, _groups)) {
         final before = health;
+        final wasActive = activeTag;
         _groups = value;
         _testing = false;
         _latencyView = null;
         _signal(groupsChanged);
+        // Another server is another way out, and a live switch changes nothing else
+        // that would say so.
+        if (wasActive != null && activeTag != wasActive) {
+          _forgetExitIp();
+          if (_data.autoCheckIp) unawaited(refreshExitIp());
+        }
         // Group updates arrive on their own signal precisely so a latency reading
         // does not rebuild the tree. Health is the exception: it changes rarely, and
         // when it does the whole screen has something different to say.
@@ -509,30 +549,52 @@ class TunnelController extends ChangeNotifier {
 
   // ---- tunnel -----------------------------------------------------------
 
+  /// Starts the tunnel on the selected server. Does nothing while a start is already
+  /// under way: a second one beside it would draw its own loopback credentials and
+  /// leave the two halves of the config disagreeing about them.
   Future<void> connect() async {
+    if (_connecting) return;
+    await _start(replace: false);
+  }
+
+  Future<void> _start({required bool replace}) async {
+    final attempt = ++_attempt;
+    _connecting = true;
+    notifyListeners();
+    try {
+      await _prepareAndStart(attempt, replace: replace);
+    } finally {
+      // A later attempt, or a stop, has already had the last word on this.
+      if (attempt == _attempt) {
+        _connecting = false;
+        if (!_disposed) notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _prepareAndStart(int attempt, {required bool replace}) async {
+    bool overtaken() => _disposed || attempt != _attempt;
+
+    // Taken together, before anything is waited for. The parts below have to agree
+    // with each other, and by the time a slow mirror has answered a subscription may
+    // have refreshed or a setting changed.
     final server = selected;
+    final servers = _data.servers;
+    final settings = _settings;
+    final settingsEncoded = _settingsEncoded;
     if (server == null) {
       _fail(const ActionError(ActionErrorKind.noServer));
       return;
     }
-    if (!server.isUsable) {
-      // Known-impossible up front. Letting this proceed would spend five seconds
-      // reaching a handshake error that says nothing about the real cause.
-      _fail(
-        ActionError(
-          ActionErrorKind.serverUnsupported,
-          subject: server.tag,
-          detail: server.unsupported.first,
-        ),
-      );
-      return;
-    }
+    // Known-impossible up front. Letting this proceed would spend five seconds
+    // reaching a handshake error that says nothing about the real cause.
+    if (_refuse(server)) return;
 
     // The one server each other core will carry — not necessarily the selected one.
     // Running both for the whole session is what lets every server be measured and
     // switched to, rather than only the one that happened to be chosen at connect.
-    final xrayServer = _settings.xrayServerFor(server, servers);
-    final amneziaServer = _settings.amneziaServerFor(server, servers);
+    final xrayServer = settings.xrayServerFor(server, servers);
+    final amneziaServer = settings.amneziaServerFor(server, servers);
     if (server.requiresXray && xrayServer == null) {
       _fail(ActionError(ActionErrorKind.xrayUnconvertible, subject: server.tag));
       return;
@@ -542,21 +604,24 @@ class TunnelController extends ChangeNotifier {
     final loopback = LoopbackAuth.random();
     final xrayConfig = xrayServer == null
         ? null
-        : XrayConfig.build(xrayServer, tricks: _settings.tlsTricks, loopback: loopback);
+        : XrayConfig.build(xrayServer, tricks: settings.tlsTricks, loopback: loopback);
 
     // Rule sets must exist on disk before the config references them. Time-boxed:
     // a slow or unreachable mirror must delay the connect, not prevent it.
     await refreshRuleSets(within: const Duration(seconds: 12));
+    if (overtaken()) return;
 
     try {
       // Consent is requested before anything is written, so a declined dialog
       // leaves no half-applied state behind.
-      if (!await _channel.prepare()) {
+      final allowed = await _channel.prepare();
+      if (overtaken()) return;
+      if (!allowed) {
         _fail(const ActionError(ActionErrorKind.vpnPermission));
         return;
       }
       await _channel.start(
-        config: _settings.build(
+        config: settings.build(
           server,
           servers: servers,
           ruleSetPaths: _ruleSetPaths,
@@ -571,11 +636,29 @@ class TunnelController extends ChangeNotifier {
         proxyLabel: _proxyLabel,
         directLabel: _directLabel,
         groupName: _subscriptionNameOf(server),
+        replace: replace,
       );
-      _appliedSettingsEncoded = _settingsEncoded;
+      if (overtaken()) return;
+      _appliedSettingsEncoded = settingsEncoded;
     } on TunnelException catch (e) {
-      _fail(e);
+      if (!overtaken()) _fail(e);
+      return;
     }
+    // With nothing chosen the first server stands in for it, and the first is whichever
+    // one a refresh put there. What runs is written down as the choice, so that the next
+    // refresh cannot read as one and move the tunnel somewhere else.
+    if (_data.selectedTag == server.tag) return;
+    if (servers.any((s) => s.tag == _data.selectedTag)) return;
+    _data = _data.copyWith(selectedTag: server.tag);
+    await _persist();
+  }
+
+  /// Says why a server cannot be used, and returns true, when it cannot.
+  bool _refuse(Outbound server) {
+    final problem = server.problem;
+    if (problem == null) return false;
+    _fail(ActionError(ActionErrorKind.serverUnsupported, subject: server.tag, problem: problem));
+    return true;
   }
 
   /// Asks for a reconnect when the running tunnel was started from a config older
@@ -602,21 +685,23 @@ class TunnelController extends ChangeNotifier {
 
   /// Restarts the tunnel so changed settings take effect.
   ///
-  /// The wait in the middle is the point of this method existing at all. Stopping is
-  /// fire-and-forget across the platform channel: the call posts an intent and
-  /// returns immediately, while the service tears the tunnel down on its own thread.
-  /// Starting again before that finishes lets the two interleave, and the teardown —
-  /// which finishes last — takes the new tunnel down with it. The symptom is a
-  /// reconnect that sometimes leaves everything off, depending on nothing the user
-  /// can see.
+  /// The service does this in one step, with the TUN device left in place until the new
+  /// tunnel has one of its own. Stopping and then starting took the device away in
+  /// between, and for those seconds every app on the phone was on the bare network —
+  /// which someone who switched the tunnel on to not be there has no way to see.
   ///
-  /// [stopTimeout] is a ceiling, not a contract. Giving up and starting anyway is the
-  /// better failure: a start that fails is visible and recoverable, while returning
-  /// from here without one leaves a tunnel that is neither up nor coming up.
+  /// A tunnel already on its way down is waited for, because the service would take the
+  /// new one for a part of the old. [stopTimeout] is a ceiling, not a contract: a start
+  /// that fails is visible and recoverable, while returning without one leaves a tunnel
+  /// that is neither up nor coming up.
   Future<void> reconnect({Duration stopTimeout = const Duration(seconds: 10)}) async {
-    await disconnect();
-    await _awaitStopped(stopTimeout);
-    await connect();
+    if (_status.stage == TunnelStage.stopping) {
+      final attempt = _attempt;
+      await _awaitStopped(stopTimeout);
+      // Connected or disconnected by hand while this waited. That is the newer wish.
+      if (_disposed || attempt != _attempt) return;
+    }
+    await _start(replace: _status.stage != TunnelStage.stopped);
   }
 
   /// Waits for the tunnel to actually be down.
@@ -626,14 +711,19 @@ class TunnelController extends ChangeNotifier {
   /// waits for a "stopped" that has already happened and never comes again.
   Future<void> _awaitStopped(Duration timeout) async {
     final deadline = DateTime.now().add(timeout);
-    while (_status.stage.isActive || _status.stage.isBusy) {
+    while (_status.stage == TunnelStage.stopping) {
       if (!DateTime.now().isBefore(deadline)) return;
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
   }
 
   Future<void> disconnect() async {
+    // Anything still getting ready to start stops here.
+    _attempt++;
+    final preparing = isPreparing;
+    _connecting = false;
     _appliedSettingsEncoded = null;
+    if (preparing) notifyListeners();
     try {
       await _channel.stop();
     } on TunnelException catch (e) {
@@ -641,7 +731,7 @@ class TunnelController extends ChangeNotifier {
     }
   }
 
-  Future<void> toggle() => _status.stage.isActive ? disconnect() : connect();
+  Future<void> toggle() => _status.stage.isActive || isPreparing ? disconnect() : connect();
 
   // ---- latency & live switching -----------------------------------------
 
@@ -673,10 +763,15 @@ class TunnelController extends ChangeNotifier {
   /// The app is the source of truth. Every way a server can be chosen updates
   /// [selected] first, so correcting towards it can never fight a deliberate switch —
   /// after one, the two already agree and this does nothing.
+  ///
+  /// Only towards a server that was chosen. [selected] falls back to the first in the
+  /// list when the chosen one is gone, and a refresh that renamed a server would then
+  /// move a running tunnel to whichever one happened to come first.
   Future<void> _alignSelection() async {
     final group = proxyGroup;
-    final wanted = selected?.tag;
+    final wanted = _data.selectedTag;
     if (group == null || wanted == null || group.selected == wanted) return;
+    if (!_data.servers.any((server) => server.tag == wanted)) return;
     // Not a member: a server that needs another core is only ever in the config when
     // it is the selected one, so this means the config is older than the choice and
     // a reconnect is already on its way.
@@ -761,7 +856,12 @@ class TunnelController extends ChangeNotifier {
   ///
   /// Falls back to a full reconnect when the target is not a member of the running
   /// config — an Xray-only server, since exactly one Xray instance runs at a time.
+  ///
+  /// Refuses a server that cannot be used, before anything else: with the tunnel up it
+  /// is never in the running config, so going on meant a reconnect to a server known
+  /// not to work — and a tunnel that was working gone.
   Future<void> switchTo(Outbound server) async {
+    if (_refuse(server)) return;
     await select(server);
     if (!_status.stage.isActive) return;
     final group = proxyGroup;
@@ -775,8 +875,6 @@ class TunnelController extends ChangeNotifier {
         return;
       }
     }
-    // The same wait as anywhere else the tunnel is cycled: this path exists for the
-    // servers that cannot be switched live, and it is no less of a race for it.
     await reconnect();
   }
 
@@ -828,7 +926,10 @@ class TunnelController extends ChangeNotifier {
   ///
   /// The file is not a link and never will be — it is what every WireGuard provider
   /// hands out, so the paste box takes it rather than making the user convert it.
-  Future<void> addFromLink(String link) async {
+  ///
+  /// True when a server was added. Like the other ways in below, a failure is reported
+  /// through [lastActionError]; the result is for a form deciding whether to close.
+  Future<bool> addFromLink(String link) async {
     final parsed = ShareLink.parse(link) ?? WireGuardConfig.parse(link);
     if (parsed == null) {
       _fail(
@@ -840,9 +941,10 @@ class TunnelController extends ChangeNotifier {
               : ActionErrorKind.notALink,
         ),
       );
-      return;
+      return false;
     }
     await _addServers([parsed], selectFirst: _data.servers.isEmpty);
+    return true;
   }
 
   /// Adds a hand-written sing-box outbound.
@@ -850,13 +952,13 @@ class TunnelController extends ChangeNotifier {
   /// Validated by the core before it is saved, in the same config shape it will run
   /// in. Catching it here means a typo surfaces as a parser message next to the text
   /// box, instead of a failed connection later with nothing pointing at the cause.
-  Future<void> addCustomOutbound(String source, {String? name}) async {
+  Future<bool> addCustomOutbound(String source, {String? name}) async {
     final Outbound parsed;
     try {
       parsed = CustomOutbound.parse(source, name: name);
     } on FormatException catch (e) {
       _fail(e);
-      return;
+      return false;
     }
     try {
       final error = await _channel.validateConfig(
@@ -864,16 +966,17 @@ class TunnelController extends ChangeNotifier {
       );
       if (error != null) {
         _fail(ActionError(ActionErrorKind.configRejected, detail: error));
-        return;
+        return false;
       }
     } on TunnelException catch (e) {
       _fail(e);
-      return;
+      return false;
     }
     await _addServers([parsed], selectFirst: _data.servers.isEmpty);
+    return true;
   }
 
-  Future<void> importSubscription({required String name, required String url}) async {
+  Future<bool> importSubscription({required String name, required String url}) async {
     // The same address twice is the same servers twice, and nothing to gain: import
     // it again and the one already there is refreshed instead.
     final existing = _data.subscriptions.where((s) => s.url.trim() == url.trim()).firstOrNull;
@@ -891,8 +994,10 @@ class TunnelController extends ChangeNotifier {
       );
       _data = _data.copyWith(subscriptions: [..._data.subscriptions, subscription]);
       await _addServers(result.servers, selectFirst: _data.servers.isEmpty);
+      return true;
     } catch (e) {
       _fail(e);
+      return false;
     }
   }
 
@@ -921,11 +1026,13 @@ class TunnelController extends ChangeNotifier {
   }
 
   /// Refreshes and reports the failure to the user. For a refresh the user asked for.
-  Future<void> refreshSubscription(Subscription subscription) async {
+  Future<bool> refreshSubscription(Subscription subscription) async {
     try {
       await _refresh(subscription);
+      return true;
     } catch (e) {
       _fail(e);
+      return false;
     }
   }
 
@@ -933,6 +1040,9 @@ class TunnelController extends ChangeNotifier {
   Future<void> _refresh(Subscription subscription) async {
     final result = await SubscriptionFetcher(allowInsecure: _data.insecureDownloads)
         .fetch(subscription.url, subscriptionId: subscription.id);
+    // Removed while it was being fetched. Its servers would come back belonging to a
+    // subscription that no longer exists, with nothing left to remove them by.
+    if (!_data.subscriptions.any((s) => s.id == subscription.id)) return;
     // Replace this subscription's servers wholesale; a refresh is authoritative.
     final kept = _data.servers.where((s) => s.subscriptionId != subscription.id).toList();
     _data = _data.copyWith(
@@ -1201,7 +1311,7 @@ class TunnelController extends ChangeNotifier {
         _fail(
           ActionError(
             ActionErrorKind.ruleSetsUnavailable,
-            subject: _unavailablePresets.map((e) => e.label).join(', '),
+            subject: _unavailablePresets.map((e) => e.id).join(','),
           ),
         );
       }
@@ -1220,6 +1330,14 @@ class TunnelController extends ChangeNotifier {
     if (_lastActionError == null) return;
     _lastActionError = null;
     notifyListeners();
+  }
+
+  /// The last failure, handed to a caller that shows it where the work was asked for.
+  /// Left alone it becomes the shell's message, which is out of sight under a sheet.
+  ActionError? takeActionError() {
+    final error = _lastActionError;
+    clearActionError();
+    return error;
   }
 
   // ---- internals --------------------------------------------------------

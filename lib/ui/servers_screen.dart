@@ -13,6 +13,7 @@ import '../main.dart';
 import 'app_shell.dart';
 import 'motion.dart';
 import 'chips.dart';
+import 'error_text.dart';
 import 'scan_screen.dart';
 import 'secret_copy.dart';
 import 'speed_test_sheet.dart';
@@ -545,6 +546,10 @@ class _GroupHeader extends StatelessWidget {
             Expanded(
               child: Semantics(
                 header: true,
+                // The ink's own tap is left out with the rest of what is under here, so
+                // it is said again.
+                button: onToggle != null,
+                onTap: onToggle,
                 expanded: onToggle == null ? null : !folded,
                 label: '$title, ${l10n.serverCount(count)}',
                 excludeSemantics: true,
@@ -703,9 +708,12 @@ class _ServerTile extends StatelessWidget {
               _Note(
                 icon: Icons.swap_vert,
                 color: scheme.onSurfaceVariant,
-                text:
-                    '${formatBytes(usage.total)}'
-                    '  ↓ ${formatBytes(usage.download)}  ↑ ${formatBytes(usage.upload)}',
+                // A line too long for the row breaks between the figures, not inside one.
+                text: [
+                  formatBytes(usage.total),
+                  '↓ ${formatBytes(usage.download)}',
+                  '↑ ${formatBytes(usage.upload)}',
+                ].map((figure) => figure.replaceAll(' ', '\u00a0')).join('  '),
                 // Three byte counts in a row, told apart only by two arrows a screen
                 // reader does not read out.
                 semanticsLabel:
@@ -714,7 +722,11 @@ class _ServerTile extends StatelessWidget {
                     '${l10n.upload} ${formatBytes(usage.upload)}',
               ),
             if (!server.isUsable)
-              _Note(icon: Icons.block, color: scheme.error, text: server.unsupported.first)
+              _Note(
+                icon: Icons.block,
+                color: scheme.error,
+                text: describeProblem(l10n, server.problem!),
+              )
             else if (server.requiresXray)
               _Note(icon: Icons.bolt, color: scheme.tertiary, text: l10n.runsOnXray)
             else if (server.requiresAmnezia)
@@ -826,6 +838,8 @@ extension on _ServerTile {
             SnackBar(
               content: Text(l10n.serverRemoved(server.tag)),
               behavior: SnackBarBehavior.floating,
+              persist: false,
+              duration: const Duration(seconds: 6),
               action: SnackBarAction(
                 label: l10n.actionUndo,
                 onPressed: () => controller.restoreServer(server, index),
@@ -995,6 +1009,10 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
   final _jsonNameController = TextEditingController();
   bool _busy = false;
 
+  /// What went wrong, under the field it is about, by tab. The shell's message would
+  /// be behind this sheet.
+  final _errors = <int, String>{};
+
   @override
   void dispose() {
     _tabs.dispose();
@@ -1012,12 +1030,34 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
     if (result != null && mounted) target.text = result;
   }
 
-  Future<void> _run(Future<void> Function() action) async {
-    setState(() => _busy = true);
-    await action();
+  /// Closes only once it is done. A sheet that went away with the failure took what
+  /// had been typed with it, and a link with one character missing had to be found and
+  /// pasted again.
+  Future<void> _run(int tab, Future<bool> Function(TunnelController controller) action) async {
+    final l10n = AppLocalizations.of(context);
+    final controller = TunnelScope.read(context);
+    setState(() {
+      _busy = true;
+      _errors.remove(tab);
+    });
+    var done = false;
+    Object? error;
+    try {
+      done = await action(controller);
+      if (!done && mounted) error = controller.takeActionError();
+    } catch (e) {
+      error = e;
+    }
     if (!mounted) return;
-    setState(() => _busy = false);
-    Navigator.of(context).pop();
+    setState(() {
+      _busy = false;
+      if (error != null) _errors[tab] = describeError(l10n, error);
+    });
+    if (done) Navigator.of(context).pop();
+  }
+
+  void _clearError(int tab) {
+    if (_errors.containsKey(tab)) setState(() => _errors.remove(tab));
   }
 
   @override
@@ -1051,9 +1091,14 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
                         controller: _linkController,
                         maxLines: 4,
                         autocorrect: false,
+                        onChanged: (_) => _clearError(0),
                         decoration: InputDecoration(
                           labelText: l10n.fieldShareLink,
-                          hintText: 'vless:// · vmess:// · trojan:// · ss:// · hysteria2:// · tuic://\nanytls:// · socks:// · wireguard:// · or a WireGuard .conf',
+                          hintText:
+                              'vless:// · vmess:// · trojan:// · ss:// · hysteria2:// · tuic://\n'
+                              'anytls:// · socks:// · wireguard:// · ${l10n.hintWireGuardConf}',
+                          errorText: _errors[0],
+                          errorMaxLines: 4,
                           alignLabelWithHint: true,
                           suffixIcon: IconButton(
                             icon: const Icon(Icons.qr_code_scanner),
@@ -1065,7 +1110,7 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
                     ],
                     action: l10n.actionAddServer,
                     onSubmit: () =>
-                        _run(() => TunnelScope.read(context).addFromLink(_linkController.text)),
+                        _run(0, (controller) => controller.addFromLink(_linkController.text)),
                   ),
                   _pane(
                     children: [
@@ -1073,9 +1118,12 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
                         controller: _urlController,
                         autocorrect: false,
                         keyboardType: TextInputType.url,
+                        onChanged: (_) => _clearError(1),
                         decoration: InputDecoration(
                           labelText: l10n.fieldSubscriptionUrl,
                           hintText: 'https://…',
+                          errorText: _errors[1],
+                          errorMaxLines: 4,
                           suffixIcon: IconButton(
                             icon: const Icon(Icons.qr_code_scanner),
                             tooltip: l10n.scanQrCode,
@@ -1091,7 +1139,8 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
                     ],
                     action: l10n.actionImport,
                     onSubmit: () => _run(
-                      () => TunnelScope.read(context).importSubscription(
+                      1,
+                      (controller) => controller.importSubscription(
                         name: _nameController.text.trim(),
                         url: _urlController.text.trim(),
                       ),
@@ -1103,9 +1152,13 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
                         controller: _jsonController,
                         maxLines: 8,
                         autocorrect: false,
+                        textDirection: TextDirection.ltr,
                         style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                        onChanged: (_) => _clearError(2),
                         decoration: InputDecoration(
                           labelText: l10n.fieldOutboundJson,
+                          errorText: _errors[2],
+                          errorMaxLines: 4,
                           hintText: '{"type": "vless", "server": "...", ...}',
                           alignLabelWithHint: true,
                           helperText: l10n.outboundJsonHelp,
@@ -1120,8 +1173,11 @@ class _AddSheetState extends State<_AddSheet> with SingleTickerProviderStateMixi
                     ],
                     action: l10n.actionAddServer,
                     onSubmit: () => _run(
-                      () => TunnelScope.read(context)
-                          .addCustomOutbound(_jsonController.text, name: _jsonNameController.text),
+                      2,
+                      (controller) => controller.addCustomOutbound(
+                        _jsonController.text,
+                        name: _jsonNameController.text,
+                      ),
                     ),
                   ),
                 ],
@@ -1191,8 +1247,36 @@ Future<void> _confirmRemoveSubscription(
   if (confirmed ?? false) await controller.removeSubscription(sub);
 }
 
-class _SubscriptionSheet extends StatelessWidget {
+class _SubscriptionSheet extends StatefulWidget {
   const _SubscriptionSheet();
+
+  @override
+  State<_SubscriptionSheet> createState() => _SubscriptionSheetState();
+}
+
+class _SubscriptionSheetState extends State<_SubscriptionSheet> {
+  /// The ones being fetched. A provider can take half a minute to answer, and a button
+  /// that looks untouched for that long gets pressed again.
+  final _refreshing = <String>{};
+
+  /// Why the last refresh of each failed, where it was asked for.
+  final _errors = <String, String>{};
+
+  Future<void> _refresh(Subscription sub) async {
+    final l10n = AppLocalizations.of(context);
+    final controller = TunnelScope.read(context);
+    setState(() {
+      _refreshing.add(sub.id);
+      _errors.remove(sub.id);
+    });
+    final done = await controller.refreshSubscription(sub);
+    if (!mounted) return;
+    final error = done ? null : controller.takeActionError();
+    setState(() {
+      _refreshing.remove(sub.id);
+      if (error != null) _errors[sub.id] = describeError(l10n, error);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1219,15 +1303,29 @@ class _SubscriptionSheet extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (!sub.usage.isEmpty) _Quota(usage: sub.usage),
+                if (_errors[sub.id] case final error?)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      error,
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
               ],
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.refresh),
+                  icon: _refreshing.contains(sub.id)
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
                   tooltip: l10n.actionRefresh,
-                  onPressed: () => controller.refreshSubscription(sub),
+                  onPressed: _refreshing.contains(sub.id) ? null : () => _refresh(sub),
                 ),
                 IconButton(
                   icon: const Icon(Icons.delete_outline),

@@ -100,8 +100,8 @@ class _ConnectButtonState extends State<ConnectButton> with SingleTickerProvider
         ? scheme.primary
         : scheme.surfaceContainerHighest;
 
-    // Disabled while starting or stopping: a second tap mid-transition is the classic
-    // way to end up with the UI and the tunnel disagreeing.
+    // Taps while the tunnel is starting cancel it; while it is stopping they do nothing,
+    // which is the controller's to decide.
     final onTap = widget.enabled
         ? () {
             final controller = TunnelScope.read(context);
@@ -113,7 +113,11 @@ class _ConnectButtonState extends State<ConnectButton> with SingleTickerProvider
     return Semantics(
       button: true,
       enabled: onTap != null,
-      label: active ? l10n.actionDisconnect : l10n.actionConnect,
+      label: active
+          ? l10n.actionDisconnect
+          : widget.status.stage == TunnelStage.starting
+          ? l10n.actionCancel
+          : l10n.actionConnect,
       child: SizedBox(
         width: _box,
         height: _box,

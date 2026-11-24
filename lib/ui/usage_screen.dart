@@ -139,29 +139,47 @@ class UsageChart extends StatelessWidget {
         children: [
           for (final day in days)
             Expanded(
-              child: GestureDetector(
-                onTap: () => onSelect(day),
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  // A surface gap between bars, so adjacent days never read as one.
-                  padding: const EdgeInsets.symmetric(horizontal: 1),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Container(
-                        // A day with no traffic still gets a sliver, so the axis
-                        // reads as continuous rather than as missing days.
-                        height: peak == 0 ? 2 : (2 + (day.total / peak) * 118),
-                        decoration: BoxDecoration(
-                          color: day == selected
-                              ? scheme.primary
-                              : scheme.primary.withValues(alpha: 0.55),
-                          // Rounded at the data end only; the baseline stays square
-                          // so bars sit on the axis rather than floating above it.
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+              // A bar has no words of its own, so without these a screen reader finds
+              // nothing here at all.
+              child: Semantics(
+                button: true,
+                selected: day == selected,
+                label: '${_formatDate(context, day.date)}, ${formatBytes(day.total)}',
+                child: GestureDetector(
+                  onTap: () => onSelect(day),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    // A surface gap between bars, so adjacent days never read as one.
+                    padding: const EdgeInsets.symmetric(horizontal: 1),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Container(
+                          // A day with no traffic still gets a sliver, so the axis
+                          // reads as continuous rather than as missing days.
+                          height: peak == 0 ? 2 : (2 + (day.total / peak) * 118),
+                          decoration: BoxDecoration(
+                            color: day == selected
+                                ? scheme.primary
+                                : scheme.primary.withValues(alpha: 0.55),
+                            // Rounded at the data end only; the baseline stays square
+                            // so bars sit on the axis rather than floating above it.
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                          ),
                         ),
-                      ),
-                    ],
+                        // The selected day by shape as well: a shade alone is no mark
+                        // to anyone who cannot tell the two apart.
+                        Container(
+                          margin: const EdgeInsets.only(top: 4),
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: day == selected ? scheme.primary : null,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -198,7 +216,7 @@ class _Detail extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_formatDate(value.date), style: theme.textTheme.titleSmall),
+                  Text(_formatDate(context, value.date), style: theme.textTheme.titleSmall),
                   const SizedBox(height: 4),
                   Text(
                     '↑ ${formatBytes(value.upload)}   ↓ ${formatBytes(value.download)}',
@@ -233,7 +251,7 @@ class _Row extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Expanded(child: Text(_formatDate(day.date), style: theme.textTheme.bodyMedium)),
+          Expanded(child: Text(_formatDate(context, day.date), style: theme.textTheme.bodyMedium)),
           Text(
             '↑ ${formatBytes(day.upload)}  ↓ ${formatBytes(day.download)}',
             style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
@@ -274,19 +292,5 @@ class _Empty extends StatelessWidget {
   );
 }
 
-const _months = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-String _formatDate(DateTime date) => '${date.day} ${_months[date.month - 1]}';
+String _formatDate(BuildContext context, DateTime date) =>
+    MaterialLocalizations.of(context).formatShortMonthDay(date);

@@ -22,6 +22,7 @@ class SpeedTest {
     this.downloadUrl = defaultDownloadUrl,
     this.uploadUrl = defaultUploadUrl,
     this.budget = const Duration(seconds: 10),
+    this.patience = const Duration(seconds: 10),
     this.samples = 3,
   });
 
@@ -38,6 +39,13 @@ class SpeedTest {
   /// A cap rather than a target: a fast link finishes the payload early and is
   /// measured over the time it actually took.
   final Duration budget;
+
+  /// How long to wait for an answer to start.
+  ///
+  /// Connecting has its own limit and was the only thing that did, so a server that
+  /// accepted the connection and then said nothing left the test running for good —
+  /// which through a tunnel that carries nothing is the usual case, not the odd one.
+  final Duration patience;
 
   /// How many round trips the latency figure is taken from.
   final int samples;
@@ -70,9 +78,12 @@ class SpeedTest {
       for (var i = 0; i < samples; i++) {
         final began = DateTime.now();
         try {
-          final request = await client.getUrl(Uri.parse(latencyUrl));
-          final response = await request.close();
-          await response.drain<void>();
+          final request = await client.getUrl(Uri.parse(latencyUrl)).timeout(patience);
+          final response = await request.close().timeout(patience);
+          await response.drain<void>().timeout(patience);
+        } on TimeoutException {
+          // Silence, and the next sample would be the same silence for as long again.
+          break;
         } catch (_) {
           continue;
         }
@@ -89,8 +100,8 @@ class SpeedTest {
   Future<double?> download() async {
     final client = openClient();
     try {
-      final request = await client.getUrl(Uri.parse(downloadUrl));
-      final response = await request.close();
+      final request = await client.getUrl(Uri.parse(downloadUrl)).timeout(patience);
+      final response = await request.close().timeout(patience);
       final began = DateTime.now();
       var received = 0;
       final done = Completer<void>();
@@ -137,7 +148,7 @@ class SpeedTest {
   Future<double?> upload() async {
     final client = openClient();
     try {
-      final request = await client.postUrl(Uri.parse(uploadUrl));
+      final request = await client.postUrl(Uri.parse(uploadUrl)).timeout(patience);
       request.headers.contentType = ContentType.binary;
       // Chunked, rather than a declared length. The budget can stop this early, and a
       // body shorter than its own Content-Length is a broken request rather than a
@@ -155,20 +166,30 @@ class SpeedTest {
         block[i] = random.nextInt(256);
       }
 
+      var stalled = false;
       while (sent < _uploadBytes) {
-        if (DateTime.now().difference(began) >= budget) break;
+        final left = budget - DateTime.now().difference(began);
+        if (left <= Duration.zero) break;
         final size = min(chunk, _uploadBytes - sent);
         request.add(size == chunk ? block : Uint8List.sublistView(block, 0, size));
-        await request.flush();
+        try {
+          // Waits for room in the socket, which on a path that stopped carrying
+          // anything never comes.
+          await request.flush().timeout(left);
+        } on TimeoutException {
+          stalled = true;
+          break;
+        }
         sent += size;
       }
       final elapsed = DateTime.now().difference(began);
+      if (stalled) return _rate(sent, elapsed);
       // Finished properly rather than dropped. The measurement is already taken, and
       // aborting the socket here shows up at the other end as an error we caused —
       // bounded, because waiting on a reply is not part of what is being measured.
       try {
         final response = await request.close().timeout(const Duration(seconds: 5));
-        await response.drain<void>();
+        await response.drain<void>().timeout(const Duration(seconds: 5));
       } catch (_) {
         // The body is sent either way; the reply is not the measurement.
       }

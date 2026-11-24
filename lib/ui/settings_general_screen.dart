@@ -93,6 +93,33 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
     });
   }
 
+  /// Shows a setting the service keeps as changed, and hands it over to be kept.
+  ///
+  /// Shown first so the switch moves under the finger. If it could not be stored it
+  /// goes back to where it was and says so: a switch that stays on over a setting that
+  /// is off is worse than one that does not move.
+  Future<void> _store<T>(
+    T before,
+    T value,
+    void Function(T value) show,
+    Future<void> Function(T value) store,
+  ) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => show(value));
+    try {
+      await store(value);
+    } on Object {
+      if (!mounted) return;
+      setState(() => show(before));
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text(l10n.settingNotSaved), behavior: SnackBarBehavior.floating),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = TunnelScope.of(context);
@@ -149,8 +176,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
                     value == NotificationSpeed.split ? l10n.notificationSpeedSplitBody : '',
               );
               if (choice == null) return;
-              setState(() => _notificationSpeed = choice);
-              TunnelChannel.instance.setNotificationSpeed(choice).catchError((Object _) {});
+              _store(
+                _notificationSpeed,
+                choice,
+                (v) => _notificationSpeed = v,
+                TunnelChannel.instance.setNotificationSpeed,
+              );
             },
           ),
           SettingsTile(
@@ -167,8 +198,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
                 label: l10n.secondsValue,
               );
               if (choice == null) return;
-              setState(() => _notificationInterval = choice);
-              TunnelChannel.instance.setNotificationInterval(choice).catchError((Object _) {});
+              _store(
+                _notificationInterval,
+                choice,
+                (v) => _notificationInterval = v,
+                TunnelChannel.instance.setNotificationInterval,
+              );
             },
           ),
           SwitchListTile(
@@ -176,10 +211,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
             secondary: const Icon(Icons.label_outline),
             title: Text(l10n.groupInNotification),
             subtitle: Text(l10n.groupInNotificationBody),
-            onChanged: (value) {
-              setState(() => _groupInNotification = value);
-              TunnelChannel.instance.setGroupInNotification(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _groupInNotification,
+              value,
+              (v) => _groupInNotification = v,
+              TunnelChannel.instance.setGroupInNotification,
+            ),
           ),
           SwitchListTile(
             value: controller.hapticFeedback,
@@ -193,10 +230,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
             secondary: const Icon(Icons.restart_alt),
             title: Text(l10n.connectAfterRestart),
             subtitle: Text(l10n.connectAfterRestartBody),
-            onChanged: (value) {
-              setState(() => _autoStart = value);
-              TunnelChannel.instance.setAutoStart(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _autoStart,
+              value,
+              (v) => _autoStart = v,
+              TunnelChannel.instance.setAutoStart,
+            ),
           ),
           ListTile(
             leading: Icon(
@@ -266,60 +305,64 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
             secondary: const Icon(Icons.money_off),
             title: Text(l10n.metered),
             subtitle: Text(l10n.meteredBody),
-            onChanged: (value) {
-              setState(() => _metered = value);
-              TunnelChannel.instance.setMetered(value).catchError((Object _) {});
-            },
+            onChanged: (value) =>
+                _store(_metered, value, (v) => _metered = v, TunnelChannel.instance.setMetered),
           ),
           SwitchListTile(
             value: _wakeLock,
             secondary: const Icon(Icons.bolt),
             title: Text(l10n.wakeLock),
             subtitle: Text(l10n.wakeLockBody),
-            onChanged: (value) {
-              setState(() => _wakeLock = value);
-              TunnelChannel.instance.setWakeLock(value).catchError((Object _) {});
-            },
+            onChanged: (value) =>
+                _store(_wakeLock, value, (v) => _wakeLock = v, TunnelChannel.instance.setWakeLock),
           ),
           SwitchListTile(
             value: _trafficStats,
             secondary: const Icon(Icons.insights),
             title: Text(l10n.trafficStats),
             subtitle: Text(l10n.trafficStatsBody),
-            onChanged: (value) {
-              setState(() => _trafficStats = value);
-              TunnelChannel.instance.setTrafficStats(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _trafficStats,
+              value,
+              (v) => _trafficStats = v,
+              TunnelChannel.instance.setTrafficStats,
+            ),
           ),
           SwitchListTile(
             value: _resetOnNetworkChange,
             secondary: const Icon(Icons.wifi_protected_setup),
             title: Text(l10n.resetOnNetworkChange),
             subtitle: Text(l10n.resetOnNetworkChangeBody),
-            onChanged: (value) {
-              setState(() => _resetOnNetworkChange = value);
-              TunnelChannel.instance.setResetOnNetworkChange(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _resetOnNetworkChange,
+              value,
+              (v) => _resetOnNetworkChange = v,
+              TunnelChannel.instance.setResetOnNetworkChange,
+            ),
           ),
           SwitchListTile(
             value: _resetOnWake,
             secondary: const Icon(Icons.brightness_high_outlined),
             title: Text(l10n.resetOnWake),
             subtitle: Text(l10n.resetOnWakeBody),
-            onChanged: (value) {
-              setState(() => _resetOnWake = value);
-              TunnelChannel.instance.setResetOnWake(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _resetOnWake,
+              value,
+              (v) => _resetOnWake = v,
+              TunnelChannel.instance.setResetOnWake,
+            ),
           ),
           SwitchListTile(
             value: _memoryLimit,
             secondary: const Icon(Icons.memory),
             title: Text(l10n.memoryLimit),
             subtitle: Text(l10n.memoryLimitBody),
-            onChanged: (value) {
-              setState(() => _memoryLimit = value);
-              TunnelChannel.instance.setMemoryLimit(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _memoryLimit,
+              value,
+              (v) => _memoryLimit = v,
+              TunnelChannel.instance.setMemoryLimit,
+            ),
           ),
           SwitchListTile(
             value: controller.crashReports,
@@ -342,10 +385,12 @@ class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> with Widg
             secondary: const Icon(Icons.developer_mode),
             title: Text(l10n.debugMode),
             subtitle: Text(l10n.debugModeBody),
-            onChanged: (value) {
-              setState(() => _debugMode = value);
-              TunnelChannel.instance.setDebugMode(value).catchError((Object _) {});
-            },
+            onChanged: (value) => _store(
+              _debugMode,
+              value,
+              (v) => _debugMode = v,
+              TunnelChannel.instance.setDebugMode,
+            ),
           ),
           SettingsTile(
             icon: Icons.article_outlined,

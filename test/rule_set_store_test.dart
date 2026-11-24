@@ -36,8 +36,7 @@ class _Server {
       _Server(await HttpServer.bind(InternetAddress.loopbackIPv4, 0));
 }
 
-RuleSetPreset preset(String id) =>
-    RuleSetPreset(id: id, label: id, description: id, action: RuleAction.direct, isIpSet: false);
+RuleSetPreset preset(String id) => RuleSetPreset(id: id, action: RuleAction.direct, isIpSet: false);
 
 void main() {
   late Directory dir;
@@ -111,7 +110,8 @@ void main() {
 
     final target = await store.fileFor(preset('a'));
     expect(target.existsSync(), isFalse);
-    expect(File('${target.path}.tmp').existsSync(), isFalse);
+    final left = target.parent.listSync().where((e) => e.path.endsWith('.tmp'));
+    expect(left, isEmpty);
   });
 
   test('a slow mirror does not hold the caller past its deadline', () async {
@@ -159,6 +159,37 @@ void main() {
     gate.complete();
     expect(await done, isEmpty);
     expect(peak, 3);
+  });
+
+  // A download outlives the connect that stopped waiting for it, so the next connect
+  // used to start the same one beside it, both writing one temporary file.
+  test('one already under way is joined rather than started again', () async {
+    final gate = Completer<void>();
+    var requests = 0;
+    server.script[pathFor('a')] = (request) async {
+      requests++;
+      await gate.future;
+      await ok(request);
+    };
+    await ensure([preset('a')], within: const Duration(milliseconds: 100));
+    final second = ensure([preset('a')]);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    gate.complete();
+    expect(await second, isEmpty);
+    expect(requests, 1);
+
+    // And once done, the next is a download of its own.
+    await ensure([preset('a')], force: true);
+    expect(requests, 2);
+  });
+
+  test('what a killed download left behind is cleared', () async {
+    final left = File('${dir.path}/rule-sets/a.srs.1.tmp')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('half');
+    server.script[pathFor('b')] = ok;
+    await ensure([preset('b')]);
+    expect(left.existsSync(), isFalse);
   });
 
   group('sources', () {

@@ -14,6 +14,7 @@ import 'app_shell.dart';
 import 'motion.dart';
 import 'chips.dart';
 import 'connect_button.dart';
+import 'error_text.dart';
 import 'speed_chart.dart';
 
 /// The connect screen: one control, and enough feedback to tell whether it worked.
@@ -43,7 +44,7 @@ class HomeScreen extends StatelessWidget {
                 children: [
                   ConnectButton(
                     status: status,
-                    enabled: controller.canConnect,
+                    enabled: controller.canToggle,
                     stalled: controller.health == TunnelHealth.stalled,
                     // With no servers the button would otherwise be dead: tapping it
                     // does nothing and nothing says why. Better to let it explain
@@ -66,7 +67,9 @@ class HomeScreen extends StatelessWidget {
                   _Health(connected: status.stage.isActive),
                   if (selected != null && !selected.isUsable) ...[
                     const SizedBox(height: 16),
-                    _ErrorCard(message: l10n.serverUnusable(selected.unsupported.first)),
+                    _ErrorCard(
+                      message: l10n.serverUnusable(describeProblem(l10n, selected.problem!)),
+                    ),
                   ] else if (status.error != null && !status.stage.isActive) ...[
                     const SizedBox(height: 16),
                     _ErrorCard(message: status.error!),
@@ -94,6 +97,8 @@ class HomeScreen extends StatelessWidget {
       SnackBar(
         content: Text(l10n.noServersYet),
         behavior: SnackBarBehavior.floating,
+        persist: false,
+        duration: const Duration(seconds: 6),
         action: SnackBarAction(label: l10n.actionAddServer, onPressed: onAddServer),
       ),
     );

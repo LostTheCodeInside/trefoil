@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'clash_config.dart';
 import 'outbound.dart';
+import 'server_check.dart';
 import 'wireguard_config.dart';
 
 /// Parses proxy share links into sing-box outbounds.
@@ -19,7 +20,10 @@ class ShareLink {
     final link = raw.trim();
     if (link.isEmpty) return null;
     try {
-      return switch (Uri.tryParse(link)?.scheme.toLowerCase()) {
+      // Read off the front rather than by parsing the whole: a list of ports, or an odd
+      // character in a password, makes a link that is not a URI at all.
+      final separator = link.indexOf('://');
+      return switch (separator < 0 ? null : link.substring(0, separator).toLowerCase()) {
         'vmess' => _vmess(link),
         'vless' => _vless(link),
         'trojan' => _trojan(link),
@@ -104,6 +108,9 @@ class ShareLink {
       path: str('path'),
       host: str('host'),
       serviceName: str('path'),
+      // `type` here is the header, unlike in a vless link.
+      header: str('type'),
+      secure: tls.isNotEmpty && tls != 'none',
     );
     if (transport != null) json['transport'] = transport;
     if (tls == 'tls' || tls == 'reality') {
@@ -117,7 +124,16 @@ class ShareLink {
         insecure: str('allowInsecure') == '1' || str('allowInsecure') == 'true',
       );
     }
-    return Outbound(tag: str('ps').isEmpty ? server : str('ps'), type: 'vmess', json: json);
+    return Outbound(
+      tag: str('ps').isEmpty ? server : str('ps'),
+      type: 'vmess',
+      json: json,
+      unsupported: _transportProblem(
+        network,
+        header: str('type'),
+        secure: tls.isNotEmpty && tls != 'none',
+      ),
+    );
   }
 
   /// `vless://uuid@host:port?params#name`
@@ -125,7 +141,7 @@ class ShareLink {
     final uri = Uri.parse(link);
     final uuid = Uri.decodeComponent(uri.userInfo);
     if (uri.host.isEmpty || uri.port == 0 || uuid.isEmpty) return null;
-    final q = uri.queryParameters;
+    final q = query(uri);
 
     final json = <String, Object?>{
       'type': 'vless',
@@ -135,15 +151,17 @@ class ShareLink {
       if ((q['flow'] ?? '').isNotEmpty) 'flow': q['flow'],
     };
 
+    final security = q['security'] ?? '';
     final transport = _transport(
       network: q['type'] ?? 'tcp',
       path: q['path'] ?? '',
       host: q['host'] ?? '',
       serviceName: q['serviceName'] ?? '',
+      header: q['headerType'] ?? '',
+      secure: security.isNotEmpty && security != 'none',
     );
     if (transport != null) json['transport'] = transport;
 
-    final security = q['security'] ?? '';
     if (security == 'tls' || security == 'reality') {
       final tls = _tls(
         enabled: true,
@@ -153,15 +171,16 @@ class ShareLink {
         insecure: q['allowInsecure'] == '1',
       );
       if (security == 'reality') {
+        final fingerprint = ServerCheck.fingerprint(q['fp'] ?? '');
         tls['reality'] = {
           'enabled': true,
-          if ((q['pbk'] ?? '').isNotEmpty) 'public_key': q['pbk'],
+          if ((q['pbk'] ?? '').isNotEmpty) 'public_key': ServerCheck.realityKey(q['pbk']!),
           if ((q['sid'] ?? '').isNotEmpty) 'short_id': q['sid'],
         };
         // REALITY needs a uTLS fingerprint to be worth anything; providers often omit it.
         tls['utls'] = {
           'enabled': true,
-          'fingerprint': (q['fp'] ?? '').isEmpty ? 'chrome' : q['fp'],
+          'fingerprint': fingerprint.isEmpty ? 'chrome' : fingerprint,
         };
       }
       json['tls'] = tls;
@@ -170,7 +189,7 @@ class ShareLink {
       tag: _fragment(uri) ?? uri.host,
       type: 'vless',
       json: json,
-      unsupported: _unsupportedFeatures(q),
+      unsupported: _vlessProblem(q),
       link: link,
       requiresXray: _requiresXray(q),
     );
@@ -181,7 +200,7 @@ class ShareLink {
     final uri = Uri.parse(link);
     final password = Uri.decodeComponent(uri.userInfo);
     if (uri.host.isEmpty || uri.port == 0 || password.isEmpty) return null;
-    final q = uri.queryParameters;
+    final q = query(uri);
 
     final json = <String, Object?>{
       'type': 'trojan',
@@ -204,7 +223,12 @@ class ShareLink {
       serviceName: q['serviceName'] ?? '',
     );
     if (transport != null) json['transport'] = transport;
-    return Outbound(tag: _fragment(uri) ?? uri.host, type: 'trojan', json: json);
+    return Outbound(
+      tag: _fragment(uri) ?? uri.host,
+      type: 'trojan',
+      json: json,
+      unsupported: _transportProblem(q['type'] ?? '', header: q['headerType'] ?? '', secure: true),
+    );
   }
 
   /// `ss://...` in either the modern SIP002 form or the legacy fully-base64 form.
@@ -218,23 +242,30 @@ class ShareLink {
     String server;
     int port;
 
+    final question = body.indexOf('?');
+    final q = question < 0 ? const <String, String>{} : _splitQuery(body.substring(question + 1));
+    if (question >= 0) body = body.substring(0, question);
+
     final at = body.lastIndexOf('@');
     if (at >= 0) {
-      // SIP002: ss://base64(method:password)@host:port
-      final userInfo =
-          _decodeBase64(body.substring(0, at)) ?? Uri.decodeComponent(body.substring(0, at));
+      // SIP002: ss://base64(method:password)@host:port, or the two written out with
+      // percent-encoding, which is how Shadowsocks 2022 keys have to be.
+      final raw = Uri.decodeComponent(body.substring(0, at));
+      final userInfo = raw.contains(':') ? raw : _decodeBase64(raw);
+      if (userInfo == null) return null;
       final split = userInfo.indexOf(':');
       if (split < 0) return null;
       method = userInfo.substring(0, split);
       password = userInfo.substring(split + 1);
-      final hostPort = body.substring(at + 1).split('?').first;
+      // A slash may stand between the port and the query: ss://…@host:8388/?plugin=…
+      final hostPort = body.substring(at + 1).split('/').first;
       final colon = hostPort.lastIndexOf(':');
       if (colon < 0) return null;
       server = hostPort.substring(0, colon).replaceAll(RegExp(r'^\[|\]$'), '');
       port = int.tryParse(hostPort.substring(colon + 1)) ?? 0;
     } else {
       // Legacy: ss://base64(method:password@host:port)
-      final decoded = _decodeBase64(body.split('?').first);
+      final decoded = _decodeBase64(body);
       if (decoded == null) return null;
       final at2 = decoded.lastIndexOf('@');
       final colon = decoded.lastIndexOf(':');
@@ -249,6 +280,15 @@ class ShareLink {
     }
     if (server.isEmpty || port == 0) return null;
 
+    // SIP003: the plugin's name, then its options, all in one parameter.
+    final plugin = (q['plugin'] ?? '').split(';');
+    final pluginName = switch (plugin.first) {
+      'obfs-local' || 'simple-obfs' || 'obfs' => 'obfs-local',
+      'v2ray-plugin' => 'v2ray-plugin',
+      _ => null,
+    };
+    final pluginOptions = plugin.skip(1).join(';');
+
     return Outbound(
       tag: name ?? server,
       type: 'shadowsocks',
@@ -258,17 +298,27 @@ class ShareLink {
         'server_port': port,
         'method': method,
         'password': password,
+        'plugin': ?pluginName,
+        if (pluginName != null && pluginOptions.isNotEmpty) 'plugin_opts': pluginOptions,
       },
+      unsupported: [
+        if (pluginName == null && plugin.first.isNotEmpty)
+          '${ServerProblem(ServerProblem.plugin, plugin.first)}',
+      ],
     );
   }
 
   /// `hysteria2://password@host:port?params#name`
+  ///
+  /// The port may be several, `443,5000-6000`, between which the client hops.
   static Outbound? _hysteria2(String link) {
-    final uri = Uri.parse(link);
+    final (plain, hops) = _withoutPortList(link);
+    final uri = Uri.parse(plain);
     if (uri.host.isEmpty) return null;
-    final q = uri.queryParameters;
+    final q = query(uri);
     // Hysteria2 defaults to 443 when the link omits the port.
     final port = uri.hasPort ? uri.port : 443;
+    final serverPorts = portRanges(hops ?? q['mport'] ?? '');
 
     return Outbound(
       tag: _fragment(uri) ?? uri.host,
@@ -277,8 +327,9 @@ class ShareLink {
         'type': 'hysteria2',
         'server': uri.host,
         'server_port': port,
+        if (serverPorts.isNotEmpty) 'server_ports': serverPorts,
         'password': Uri.decodeComponent(uri.userInfo),
-        if ((q['obfs'] ?? '').isNotEmpty)
+        if ((q['obfs'] ?? '').isNotEmpty && q['obfs'] != 'none')
           'obfs': {'type': q['obfs'], 'password': q['obfs-password'] ?? ''},
         'tls': _tls(
           enabled: true,
@@ -291,6 +342,27 @@ class ShareLink {
     );
   }
 
+  /// The link with its port list cut to the first port, and the list. A URI has one
+  /// port, so a list of them makes the whole link unreadable as one.
+  static (String, String?) _withoutPortList(String link) {
+    final match = RegExp(r'^([^?#]*:)(\d+)([-,][\d,-]*)(?=[/?#]|$)').firstMatch(link);
+    if (match == null) return (link, null);
+    return (
+      '${match.group(1)}${match.group(2)}${link.substring(match.end)}',
+      '${match.group(2)}${match.group(3)}',
+    );
+  }
+
+  /// `443,5000-6000` as sing-box writes it: `443:443` and `5000:6000`. Entries that are
+  /// not ports are left out, since one the core cannot read fails the whole config.
+  static List<String> portRanges(String value) => [
+    for (final part in value.split(','))
+      if (RegExp(r'^\s*(\d+)(?:\s*-\s*(\d+))?\s*$').firstMatch(part) case final match?)
+        if ((int.parse(match.group(1)!), int.parse(match.group(2) ?? match.group(1)!))
+            case (final from, final to) when from > 0 && from <= to && to <= 65535)
+          '$from:$to',
+  ];
+
   /// `tuic://uuid:password@host:port?params#name`
   static Outbound? _tuic(String link) {
     final uri = Uri.parse(link);
@@ -298,7 +370,7 @@ class ShareLink {
     final userInfo = Uri.decodeComponent(uri.userInfo);
     final split = userInfo.indexOf(':');
     if (split < 0) return null;
-    final q = uri.queryParameters;
+    final q = query(uri);
 
     return Outbound(
       tag: _fragment(uri) ?? uri.host,
@@ -328,9 +400,11 @@ class ShareLink {
   /// Version 1, which puts the credential in the query rather than the userinfo.
   /// Superseded by hysteria2 but still what a number of servers run.
   static Outbound? _hysteria(String link) {
-    final uri = Uri.parse(link);
+    final (plain, hops) = _withoutPortList(link);
+    final uri = Uri.parse(plain);
     if (uri.host.isEmpty || uri.port == 0) return null;
-    final q = uri.queryParameters;
+    final q = query(uri);
+    final serverPorts = portRanges(hops ?? q['mport'] ?? '');
 
     return Outbound(
       tag: _fragment(uri) ?? uri.host,
@@ -339,6 +413,7 @@ class ShareLink {
         'type': 'hysteria',
         'server': uri.host,
         'server_port': uri.port,
+        if (serverPorts.isNotEmpty) 'server_ports': serverPorts,
         if ((q['auth'] ?? '').isNotEmpty) 'auth_str': q['auth'],
         // Not optional, whatever the link says. sing-box refuses to build a
         // hysteria v1 outbound with no upload speed, and every server shares one
@@ -346,7 +421,12 @@ class ShareLink {
         // for every other server too.
         'up_mbps': _speedOr(q['upmbps'], _defaultUpMbps),
         'down_mbps': _speedOr(q['downmbps'], _defaultDownMbps),
-        if ((q['obfs'] ?? '').isNotEmpty) 'obfs': q['obfs'],
+        // `obfs` names the method, of which there is one, and the password has a
+        // parameter of its own. Some clients write the password under `obfs` itself.
+        if ((q['obfsParam'] ?? '').isNotEmpty)
+          'obfs': q['obfsParam']
+        else if ((q['obfs'] ?? '').isNotEmpty && q['obfs'] != 'xplus')
+          'obfs': q['obfs'],
         'tls': _tls(
           enabled: true,
           // `peer` is hysteria's own spelling of the server name.
@@ -356,6 +436,11 @@ class ShareLink {
           insecure: q['insecure'] == '1',
         ),
       },
+      unsupported: [
+        // faketcp and wechat-video: not plain UDP, and sing-box only has that.
+        if ((q['protocol'] ?? '') case final protocol when protocol.isNotEmpty && protocol != 'udp')
+          '${ServerProblem(ServerProblem.transport, protocol)}',
+      ],
     );
   }
 
@@ -376,7 +461,7 @@ class ShareLink {
     final uri = Uri.parse(link);
     final password = Uri.decodeComponent(uri.userInfo);
     if (uri.host.isEmpty || uri.port == 0 || password.isEmpty) return null;
-    final q = uri.queryParameters;
+    final q = query(uri);
 
     return Outbound(
       tag: _fragment(uri) ?? uri.host,
@@ -435,18 +520,69 @@ class ShareLink {
     );
   }
 
-  /// Whether this server can only be run by the Xray core.
+  /// Whether this server can only be run by the Xray core, for want of a field in
+  /// sing-box. Leaving any of these out gives a config that validates and then fails
+  /// the handshake with nothing to say why.
   ///
-  /// `pqv` carries a post-quantum REALITY verification key (ML-DSA-65). sing-box has
-  /// no field for it even in v1.14, and silently dropping it produces a config that
-  /// validates and then fails with an opaque "reality verification failed".
-  static bool _requiresXray(Map<String, String> q) => (q['pqv'] ?? '').isNotEmpty;
+  ///  * `pqv`, a post-quantum REALITY verification key (ML-DSA-65).
+  ///  * `encryption`, VLESS's own post-quantum encryption.
+  ///  * XHTTP, a transport sing-box does not have.
+  static bool _requiresXray(Map<String, String> q) =>
+      (q['pqv'] ?? '').isNotEmpty ||
+      !const {'', 'none'}.contains(q['encryption'] ?? '') ||
+      isXhttp(q['type'] ?? '');
 
-  /// Link features neither bundled core can honour.
+  /// XHTTP, under its present name and the one it had first.
+  static bool isXhttp(String network) => network == 'xhttp' || network == 'splithttp';
+
+  /// What neither core can honour in a vless link. Cosmetic Xray-only extras such as
+  /// `spx` are not listed: ignoring them still leaves a working connection.
+  static List<String> _vlessProblem(Map<String, String> q) {
+    final network = q['type'] ?? '';
+    if (!isXhttp(network)) {
+      final problem = _transportProblem(
+        network,
+        header: q['headerType'] ?? '',
+        // Xray's config is built without the header, so there it is never an option.
+        secure: _requiresXray(q) || !const {'', 'none'}.contains(q['security'] ?? ''),
+      );
+      if (problem.isNotEmpty) return problem;
+    }
+    // Xray used to have this and removed it, and refuses a config that asks for it.
+    // A pinned certificate is what it has instead.
+    if (_requiresXray(q) &&
+        q['security'] == 'tls' &&
+        q['allowInsecure'] == '1' &&
+        (q['pcs'] ?? '').isEmpty) {
+      return ['${const ServerProblem(ServerProblem.insecureTls)}'];
+    }
+    // HTTP/2 went the same way, so a server needing Xray for something else has none.
+    if (_requiresXray(q) && (network == 'http' || network == 'h2')) {
+      return ['${ServerProblem(ServerProblem.transport, network)}'];
+    }
+    return const [];
+  }
+
+  /// A transport sing-box cannot carry.
   ///
-  /// Empty today. Cosmetic Xray-only extras such as `spx` are not listed here:
-  /// ignoring them still leaves a working connection.
-  static List<String> _unsupportedFeatures(Map<String, String> q) => const [];
+  /// These used to be imported as plain TCP, which is a server that looks fine and
+  /// never answers.
+  static List<String> _transportProblem(
+    String network, {
+    required String header,
+    required bool secure,
+  }) {
+    switch (network) {
+      case '' || 'tcp' || 'raw':
+        return header.isEmpty || header == 'none' || (header == 'http' && !secure)
+            ? const []
+            : ['${ServerProblem(ServerProblem.transport, 'tcp + $header')}'];
+      case 'ws' || 'grpc' || 'http' || 'h2' || 'httpupgrade':
+        return const [];
+      default:
+        return ['${ServerProblem(ServerProblem.transport, network)}'];
+    }
+  }
 
   // ---- shared pieces -----------------------------------------------------
 
@@ -461,7 +597,8 @@ class ShareLink {
     if (serverName.isNotEmpty) 'server_name': serverName,
     if (alpn.isNotEmpty)
       'alpn': alpn.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
-    if (fingerprint.isNotEmpty) 'utls': {'enabled': true, 'fingerprint': fingerprint},
+    if (ServerCheck.fingerprint(fingerprint) case final name when name.isNotEmpty)
+      'utls': {'enabled': true, 'fingerprint': name},
     if (insecure) 'insecure': true,
   };
 
@@ -472,8 +609,19 @@ class ShareLink {
     required String path,
     required String host,
     required String serviceName,
+    String header = '',
+    bool secure = false,
   }) {
     switch (network) {
+      case '' || 'tcp' || 'raw' when header == 'http' && !secure:
+        // TCP dressed as an HTTP/1.1 request, which is what sing-box's http transport
+        // does when there is no TLS under it.
+        return {
+          'type': 'http',
+          if (host.isNotEmpty) 'host': host.split(',').map((e) => e.trim()).toList(),
+          if (path.isNotEmpty) 'path': path,
+          'method': 'GET',
+        };
       case 'ws':
         return {
           'type': 'ws',
@@ -498,6 +646,21 @@ class ShareLink {
         return null;
     }
   }
+
+  /// The parameters of a link.
+  ///
+  /// Not [Uri.queryParameters], which reads a plus as a space. That is the rule for
+  /// web forms; in a link a plus is part of the value, most often of a base64 key.
+  static Map<String, String> query(Uri uri) => _splitQuery(uri.query);
+
+  static Map<String, String> _splitQuery(String value) => {
+    for (final part in value.split('&'))
+      if (part.isNotEmpty)
+        if (part.indexOf('=') case final split)
+          _decodeFragment(split < 0 ? part : part.substring(0, split)): split < 0
+              ? ''
+              : _decodeFragment(part.substring(split + 1)),
+  };
 
   static String? _fragment(Uri uri) {
     final fragment = uri.fragment;

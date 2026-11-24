@@ -1,3 +1,5 @@
+import 'server_check.dart';
+
 /// A single proxy server, stored in the shape sing-box wants to receive it.
 ///
 /// The parsers deliberately produce sing-box outbound JSON directly rather than an
@@ -35,7 +37,29 @@ class Outbound {
   /// an opaque handshake error, so they are carried through to the UI instead.
   final List<String> unsupported;
 
-  bool get isUsable => unsupported.isEmpty;
+  bool get isUsable => problem == null;
+
+  /// What stands in the way of using this server, or null.
+  ///
+  /// Worked out from the server rather than stored with it, so one saved by a version
+  /// that did not look is caught as well. A server another core carries is never in
+  /// sing-box's config as itself, and only its address is held to anything.
+  ServerProblem? get problem => (_problems[this] ??= [_findProblem()]).single;
+
+  ServerProblem? _findProblem() {
+    if (unsupported.isNotEmpty) return ServerProblem.parse(unsupported.first);
+    if (requiresAmnezia) return null;
+    if (requiresXray) {
+      return serverPort > 0 && serverPort <= 65535
+          ? null
+          : ServerProblem(ServerProblem.port, '$serverPort');
+    }
+    return ServerCheck.of(json, chain: chain);
+  }
+
+  /// Kept per server: a list of thousands asks again on every frame it is drawn. A
+  /// list of one, since the answer is itself often null.
+  static final _problems = Expando<List<ServerProblem?>>();
 
   /// The share link this came from, kept verbatim.
   ///
@@ -52,9 +76,9 @@ class Outbound {
 
   /// True when only Xray-core can run this server.
   ///
-  /// Currently that means post-quantum REALITY: sing-box has no field for the
-  /// `mldsa65Verify` key even in v1.14, so such a server is handed to Xray, which
-  /// runs behind a loopback SOCKS inbound that sing-box dials as its proxy.
+  /// Post-quantum REALITY, VLESS encryption and XHTTP: sing-box has no field for any of
+  /// them even in v1.14, so such a server is handed to Xray, which runs behind a
+  /// loopback SOCKS inbound that sing-box dials as its proxy.
   final bool requiresXray;
 
   /// The AmneziaWG configuration this server needs, when it has one.

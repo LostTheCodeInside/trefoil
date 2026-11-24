@@ -402,7 +402,8 @@ class ConfigBuilder {
   /// The native side records which one the running tunnel was started from.
   ///
   /// 2: authenticated loopback hand-off to the other cores, strict route by default.
-  static const generatedConfigVersion = 2;
+  /// 3: rules apply in the order they are listed.
+  static const generatedConfigVersion = 3;
 
   /// Settings written before versioning existed are version 1.
   static bool _predatesVersion2(Map<String, Object?> map) =>
@@ -856,25 +857,60 @@ class ConfigBuilder {
   String? get _usableDirectDns {
     final value = directDns.trim();
     if (value.isEmpty) return null;
-    return isIpLiteral(_host(value)) ? value : null;
+    return isIpLiteral(dnsHost(value)) ? value : null;
   }
 
   /// True for a bare IPv4 or IPv6 address.
   static bool isIpLiteral(String value) =>
       InternetAddress.tryParse(value.replaceAll(RegExp(r'^\[|\]$'), '')) != null;
 
-  /// sing-box 1.12+ takes a bare host in `server` and the transport in `type`, so the
-  /// scheme the user wrote is what decides the transport. A bare host means plain
+  /// sing-box 1.12+ takes a bare host in `server` and everything else in fields of its
+  /// own, so the address the user wrote has to be taken apart. A bare host means plain
   /// UDP, which is what someone typing `1.1.1.1` means.
   static Map<String, Object?> _dnsServer(String tag, String url) {
-    final value = url.trim();
-    final scheme = value.contains('://') ? value.split('://').first.toLowerCase() : 'udp';
+    final uri = _dnsUri(url);
+    if (uri == null) return {'tag': tag, 'type': 'udp', 'server': url.trim()};
+    final scheme = uri.scheme;
+    final type = _dnsTypes.contains(scheme) ? scheme : 'udp';
+    final path = uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path;
     return {
       'tag': tag,
-      'type': _dnsTypes.contains(scheme) ? scheme : 'udp',
-      'server': _host(value),
+      'type': type,
+      'server': uri.host,
+      // Port 0 is what Dart makes of an empty one ("host:"), and means nothing here.
+      if (uri.hasPort && uri.port > 0) 'server_port': uri.port,
+      // Left out, sing-box asks at /dns-query. A provider that identifies an account
+      // by its path (NextDNS, AdGuard) answers there too, but as nobody in particular.
+      if ((type == 'https' || type == 'h3') && path.isNotEmpty && path != '/') 'path': path,
     };
   }
+
+  /// The address as a URI with a scheme, or null when there is no host in it.
+  static Uri? _dnsUri(String address) {
+    final value = address.trim();
+    var rest = value;
+    var scheme = 'udp';
+    final separator = value.indexOf('://');
+    if (separator >= 0) {
+      scheme = value.substring(0, separator).toLowerCase();
+      rest = value.substring(separator + 3);
+    }
+    // An IPv6 address with no brackets is one long run of port separators to a URI.
+    if (!rest.startsWith('[') && isIpLiteral(rest) && rest.contains(':')) rest = '[$rest]';
+    final uri = Uri.tryParse('$scheme://$rest');
+    return uri == null || uri.host.isEmpty ? null : uri;
+  }
+
+  /// Whether [address] names a resolver this can ask: a host, and a port it could be at.
+  static bool isDnsAddress(String address) {
+    if (address.contains(' ')) return false;
+    final uri = _dnsUri(address);
+    return uri != null && (!uri.hasPort || uri.port <= 65535);
+  }
+
+  /// The host in a DNS address, however it was written: `1.1.1.1`, `1.1.1.1:53`,
+  /// `[2606:4700::1111]:53`, `https://dns.example/query`.
+  static String dnsHost(String address) => _dnsUri(address)?.host ?? address.trim();
 
   /// Transports sing-box accepts. Anything else falls back to UDP rather than being
   /// passed through, because an unknown type stops the tunnel from starting.
@@ -889,17 +925,17 @@ class ConfigBuilder {
       // Turns a destination hostname into an address before the IP rules below are
       // reached; without it an IP rule set can never match a connection made by name.
       if (resolveDestination) {'action': 'resolve', 'strategy': _dnsStrategy},
-      // Quick modes short-circuit everything below them. In Rule mode neither
-      // matches, so routing proceeds normally.
-      {'clash_mode': modeDirect, 'outbound': directTag},
-      {'clash_mode': modeGlobal, 'outbound': proxyTag},
       // The direct-port inbound is an escape hatch, so it outranks every rule below
-      // — including the quick modes, which is why it sits here rather than lower.
+      // — including the quick modes, which is why it comes before them.
       if (directPort > 0)
         {
           'inbound': [directInTag],
           'outbound': directTag,
         },
+      // Quick modes short-circuit everything below them. In Rule mode neither
+      // matches, so routing proceeds normally.
+      {'clash_mode': modeDirect, 'outbound': directTag},
+      {'clash_mode': modeGlobal, 'outbound': proxyTag},
       // The user's own rules outrank the presets. Someone who explicitly allows a
       // domain the ad list blocks means it.
       ..._customRules(memberTags),
@@ -927,14 +963,18 @@ class ConfigBuilder {
     'auto_detect_interface': true,
   };
 
-  /// User rules, collapsed so that every (match, action) pair becomes one rule
-  /// rather than one rule per entry — the core evaluates them in order, and a
-  /// hundred single-value rules would be a hundred comparisons.
+  /// User rules, in the order they are listed, which decides between them: the first
+  /// that matches wins.
+  ///
+  /// A run of neighbours that differ only in their value becomes one rule, since the
+  /// core compares in order and a hundred single-value rules would be a hundred
+  /// comparisons. Only neighbours: collecting a pair from across the list would carry
+  /// the later one past whatever stands between them.
   List<Map<String, Object?>> _customRules(Set<String> memberTags) {
     // A record key rather than a joined string: records compare structurally, so
     // the key stays typed all the way to where the value has to be written as a
     // number or a string.
-    final grouped = <(RuleMatch, RuleAction, String?), List<String>>{};
+    final runs = <((RuleMatch, RuleAction, String?), List<String>)>[];
     for (final rule in routing.rules) {
       // An invalid rule is skipped rather than emitted. sing-box rejects the whole
       // config over one bad value, so a rule that no longer parses would take the
@@ -947,15 +987,17 @@ class ConfigBuilder {
       // A server that is not in this config falls back to the selector rather than
       // being named: sing-box rejects a route to an outbound it does not have.
       final target = memberTags.contains(rule.server) ? rule.server : null;
-      grouped.putIfAbsent((rule.match, rule.action, target), () => []).add(rule.value.trim());
+      final key = (rule.match, rule.action, target);
+      if (runs.isEmpty || runs.last.$1 != key) runs.add((key, []));
+      runs.last.$2.add(rule.value.trim());
     }
     return [
-      for (final entry in grouped.entries)
+      for (final (key, values) in runs)
         {
-          entry.key.$1.field: _ruleValues(entry.key.$1, entry.value),
-          ...switch (entry.key.$3) {
+          key.$1.field: _ruleValues(key.$1, values),
+          ...switch (key.$3) {
             final server? => {'outbound': server},
-            null => _actionFor(entry.key.$2),
+            null => _actionFor(key.$2),
           },
         },
     ];
@@ -1042,11 +1084,4 @@ class ConfigBuilder {
     },
     'cache_file': {'enabled': true, 'store_fakeip': fakeDns},
   };
-
-  /// sing-box 1.12+ takes a bare host in `server` with the scheme moved to `type`.
-  static String _host(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null || uri.host.isEmpty) return url;
-    return uri.host;
-  }
 }

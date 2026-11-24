@@ -4,10 +4,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:trefoil/core/action_error.dart';
 import 'package:trefoil/core/profile/config_builder.dart';
 import 'package:trefoil/core/profile/loopback_auth.dart';
 import 'package:trefoil/core/profile/profile_store.dart';
 import 'package:trefoil/core/profile/routing.dart';
+import 'package:trefoil/core/profile/server_check.dart';
 import 'package:trefoil/core/tunnel_channel.dart';
 import 'package:trefoil/core/tunnel_controller.dart';
 import 'package:trefoil/core/tunnel_status.dart';
@@ -47,12 +49,21 @@ class _FakeChannel extends TunnelChannel {
   /// order and the timing of these calls is the whole of what the app controls.
   final calls = <String>[];
 
+  /// Holds the VPN consent open, which is the longest a connect can wait for anything.
+  Completer<bool>? consent;
+
   @override
-  Future<bool> prepare() async => true;
+  Future<bool> prepare() async => consent == null ? true : await consent!.future;
 
   /// What the last start handed the native side, for tests that check the parts
   /// agree with each other.
-  ({String config, String? xrayConfig, String? amneziaConfig, LoopbackAuth? amneziaSocks})?
+  ({
+    String config,
+    String? xrayConfig,
+    String? amneziaConfig,
+    LoopbackAuth? amneziaSocks,
+    bool replace,
+  })?
   lastStart;
 
   @override
@@ -65,6 +76,7 @@ class _FakeChannel extends TunnelChannel {
     String proxyLabel = 'Proxy',
     String directLabel = 'Direct',
     String groupName = '',
+    bool replace = false,
   }) async {
     calls.add('start');
     lastStart = (
@@ -72,6 +84,7 @@ class _FakeChannel extends TunnelChannel {
       xrayConfig: xrayConfig,
       amneziaConfig: amneziaConfig,
       amneziaSocks: amneziaSocks,
+      replace: replace,
     );
   }
 
@@ -507,11 +520,9 @@ void main() {
     expect(signals, 2, reason: 'a fresh measurement is, even at the same number');
   });
 
-  // Changing a setting raises a Reconnect prompt, and reconnecting is a stop followed
-  // by a start. The platform's stop posts an intent and returns while the service
-  // tears the tunnel down on another thread, so starting too early lets the teardown
-  // finish last and take the new tunnel with it -- a reconnect that sometimes leaves
-  // everything off, for no reason the user can see.
+  // Reconnecting is one request the service carries out with the TUN device left in
+  // place. As a stop and then a start it took the device away in between, and for those
+  // seconds every app on the phone was on the bare network.
   group('reconnect', () {
     /// A connected tunnel with one server and nothing to download on the way up.
     Future<void> ready() async {
@@ -522,37 +533,179 @@ void main() {
       channel.calls.clear();
     }
 
-    test('does not start again while the tunnel is still up', () async {
+    test('replaces the running tunnel without stopping it', () async {
       await ready();
+      await controller.reconnect();
+      expect(channel.calls, ['start']);
+      expect(channel.lastStart!.replace, isTrue);
+    });
+
+    test('is a plain start when the tunnel is already down', () async {
+      await ready();
+      channel.tick(TunnelStatus.disconnected);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      await controller.reconnect().timeout(const Duration(seconds: 2));
+      expect(channel.calls, ['start']);
+      expect(channel.lastStart!.replace, isFalse);
+    });
+
+    // The service would take the new tunnel for a part of the old one.
+    test('waits out a tunnel that is on its way down', () async {
+      await ready();
+      channel.tick(const TunnelStatus(stage: TunnelStage.stopping));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
       final pending = controller.reconnect();
 
       // Long enough for the wrong version to have started by now.
       await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(channel.calls, ['stop'], reason: 'the start must wait for the stop to land');
+      expect(channel.calls, isEmpty);
 
       channel.tick(TunnelStatus.disconnected);
       await pending;
-      expect(channel.calls, ['stop', 'start']);
-    });
-
-    test('starts straight away when the tunnel is already down', () async {
-      await ready();
-      channel.tick(TunnelStatus.disconnected);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      channel.calls.clear();
-
-      await controller.reconnect().timeout(const Duration(seconds: 2));
-      expect(channel.calls, ['stop', 'start']);
+      expect(channel.calls, ['start']);
     });
 
     // Waiting forever would leave a tunnel that is neither up nor coming up, with
     // nothing on screen to say which. A start that fails is at least visible.
     test('gives up waiting rather than never starting', () async {
       await ready();
+      channel.tick(const TunnelStatus(stage: TunnelStage.stopping));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
       // No stopped status is ever published.
       await controller.reconnect(stopTimeout: const Duration(milliseconds: 200));
-      expect(channel.calls, ['stop', 'start']);
+      expect(channel.calls, ['start']);
     });
+
+    test('a stop asked for while it waits is the last word', () async {
+      await ready();
+      channel.tick(const TunnelStatus(stage: TunnelStage.stopping));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final pending = controller.reconnect();
+      await controller.disconnect();
+      channel.calls.clear();
+      channel.tick(TunnelStatus.disconnected);
+      await pending;
+      expect(channel.calls, isEmpty);
+    });
+  });
+
+  // Starting takes seconds: lists to download, then a consent dialog. Everything the
+  // user can do meanwhile used to act as if it had not begun.
+  group('while a start is under way', () {
+    Future<void> ready() async {
+      await controller.updateSettings(ConfigBuilder(routing: const RoutingSettings()));
+      await controller.addFromLink('trojan://pw@example.com:443#S');
+      channel
+        ..calls.clear()
+        ..consent = Completer<bool>();
+    }
+
+    /// Past the download step, to where it waits for consent.
+    Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 50));
+
+    test('a second one is not begun beside it', () async {
+      await ready();
+      final first = controller.connect();
+      await settle();
+      final second = controller.connect();
+      channel.consent!.complete(true);
+      await Future.wait([first, second]);
+      expect(channel.calls, ['start']);
+    });
+
+    test('it shows as starting, and can be called off', () async {
+      await ready();
+      final pending = controller.connect();
+      await settle();
+      expect(controller.status.stage, TunnelStage.starting);
+      expect(controller.canToggle, isTrue);
+
+      await controller.toggle();
+      expect(controller.status.stage, TunnelStage.stopped);
+
+      channel.consent!.complete(true);
+      await pending;
+      expect(channel.calls, isNot(contains('start')));
+      expect(controller.status.stage, TunnelStage.stopped);
+    });
+
+    // The config is built before the wait and started after it. What changes in between
+    // belongs to the next start.
+    test('it runs what was chosen when it began', () async {
+      await ready();
+      await controller.addFromLink('trojan://pw@example.net:443#T');
+      final pending = controller.connect();
+      await settle();
+      await controller.select(controller.servers.last);
+      channel.consent!.complete(true);
+      await pending;
+      final outbounds = (jsonDecode(channel.lastStart!.config) as Map)['outbounds'] as List;
+      final selector = outbounds.cast<Map<String, Object?>>().firstWhere(
+        (o) => o['tag'] == 'proxy',
+      );
+      expect(selector['default'], 'S');
+    });
+
+    test('a declined consent says so and leaves nothing running', () async {
+      await ready();
+      final pending = controller.connect();
+      await settle();
+      channel.consent!.complete(false);
+      await pending;
+      expect(channel.calls, isEmpty);
+      expect(controller.lastActionError?.kind, ActionErrorKind.vpnPermission);
+      expect(controller.isPreparing, isFalse);
+    });
+  });
+
+  // A server the core would refuse is refused here first, by name and with the reason.
+  group('a server that cannot be used', () {
+    const bad = 'ss://bm90LWEtY2lwaGVyOnB3@192.0.2.9:8388#Bad';
+
+    Future<void> ready() async {
+      await controller.updateSettings(ConfigBuilder(routing: const RoutingSettings()));
+      await controller.addFromLink('trojan://pw@example.com:443#Good');
+      await controller.addFromLink(bad);
+      channel.calls.clear();
+    }
+
+    test('is not switched to, and the one in use stays chosen', () async {
+      await ready();
+      channel.tick(connected);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await controller.switchTo(controller.servers.last);
+      expect(controller.selected?.tag, 'Good');
+      expect(channel.calls, isEmpty);
+      expect(controller.lastActionError?.kind, ActionErrorKind.serverUnsupported);
+      expect(controller.lastActionError?.problem?.code, ServerProblem.cipher);
+    });
+
+    test('does not stop the others from connecting', () async {
+      await ready();
+      await controller.connect();
+      expect(channel.calls, ['start']);
+      expect(channel.lastStart!.config, isNot(contains('192.0.2.9')));
+    });
+
+    test('can still be disconnected from', () async {
+      await ready();
+      await controller.select(controller.servers.last);
+      expect(controller.canToggle, isFalse);
+      channel.tick(connected);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(controller.canToggle, isTrue);
+      await controller.toggle();
+      expect(channel.calls, ['stop']);
+    });
+  });
+
+  // A form that closes on failure takes what was typed with it.
+  test('what is added says whether it was', () async {
+    expect(await controller.addFromLink('not a link'), isFalse);
+    expect(controller.takeActionError()?.kind, ActionErrorKind.notALink);
+    expect(controller.lastActionError, isNull, reason: 'taken is not also shown elsewhere');
+    expect(await controller.addFromLink('trojan://pw@example.com:443#S'), isTrue);
   });
 
   // sing-box's selector restores its own last choice from the cache file and only
@@ -592,6 +745,19 @@ void main() {
     test('says nothing when they already agree', () async {
       await ready();
       publish(now: 'Chosen');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(channel.selections, isEmpty);
+    });
+
+    // With nothing chosen the app names whichever server is first in the list, and a
+    // refresh can put any of them there. Acting on that moved a running tunnel to
+    // another server without anyone asking.
+    test('leaves the core alone when nothing was chosen', () async {
+      await ready();
+      await controller.addFromLink('trojan://pw@example.com:443#Remembered');
+      await controller.removeServer(controller.servers.first);
+      channel.selections.clear();
+      publish(now: 'Remembered');
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(channel.selections, isEmpty);
     });

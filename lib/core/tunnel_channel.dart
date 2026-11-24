@@ -120,6 +120,9 @@ class TunnelChannel {
   /// [proxyLabel] and [directLabel] are the translations the notification uses for
   /// the traffic split. They travel with the start request because the service
   /// outlives the UI and, after a reboot, starts with no Flutter engine at all.
+  ///
+  /// [replace] puts this tunnel in place of the running one, without a moment in
+  /// between when there is none. Without it a start while one runs is ignored.
   Future<void> start({
     required String config,
     required String profileName,
@@ -129,6 +132,7 @@ class TunnelChannel {
     String proxyLabel = 'Proxy',
     String directLabel = 'Direct',
     String groupName = '',
+    bool replace = false,
   }) => _invoke<void>('start', {
     'config': config,
     'configVersion': ConfigBuilder.generatedConfigVersion,
@@ -143,6 +147,7 @@ class TunnelChannel {
     'proxyLabel': proxyLabel,
     'directLabel': directLabel,
     'groupName': groupName,
+    'replace': replace,
   });
 
   Future<void> stop() => _invoke<void>('stop');

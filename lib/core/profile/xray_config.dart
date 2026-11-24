@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'loopback_auth.dart';
 import 'outbound.dart';
+import 'server_check.dart';
+import 'share_link.dart';
 
 /// Splitting the TLS handshake so a filter that inspects it sees no whole record.
 ///
@@ -75,8 +77,8 @@ class TlsTricks {
 /// outbound, because the two schemas disagree about almost everything: Xray nests
 /// the server under `settings.vnext`, keeps TLS in `streamSettings`, and names
 /// fields in camelCase. Translating between them would lose detail in both
-/// directions — most importantly `mldsa65Verify`, which is the whole reason Xray is
-/// here at all.
+/// directions — most importantly `mldsa65Verify`, VLESS encryption and XHTTP, which
+/// are the whole reason Xray is here at all.
 class XrayConfig {
   const XrayConfig._();
 
@@ -99,7 +101,7 @@ class XrayConfig {
     if (uri == null || uri.host.isEmpty || uri.port == 0) return null;
     final uuid = Uri.decodeComponent(uri.userInfo);
     if (uuid.isEmpty) return null;
-    final q = uri.queryParameters;
+    final q = ShareLink.query(uri);
     final auth = loopback ?? LoopbackAuth.random();
 
     final config = <String, Object?>{
@@ -137,9 +139,12 @@ class XrayConfig {
                 'users': [
                   {
                     'id': uuid,
-                    // VLESS has no transport encryption of its own; this field is
-                    // required and "none" is its only meaningful value.
-                    'encryption': 'none',
+                    // Required, and "none" unless the server wants VLESS's own
+                    // encryption on top of whatever carries it.
+                    'encryption': switch (q['encryption']) {
+                      final String value when value.isNotEmpty => value,
+                      _ => 'none',
+                    },
                     if ((q['flow'] ?? '').isNotEmpty) 'flow': q['flow'],
                     'level': 0,
                   },
@@ -193,26 +198,31 @@ class XrayConfig {
       if (tricks.isActive) 'sockopt': {'dialerProxy': fragmentTag},
     };
 
+    // Xray refuses to start over a name it does not know, as sing-box does.
+    final fingerprint = ServerCheck.fingerprint(q['fp'] ?? '');
     if (security == 'reality') {
       stream['realitySettings'] = {
         'serverName': q['sni'] ?? host,
         // REALITY without a uTLS fingerprint is trivially fingerprintable, and Xray
         // rejects an empty one outright.
-        'fingerprint': (q['fp'] ?? '').isEmpty ? 'chrome' : q['fp'],
-        if ((q['pbk'] ?? '').isNotEmpty) 'publicKey': q['pbk'],
+        'fingerprint': fingerprint.isEmpty ? 'chrome' : fingerprint,
+        if ((q['pbk'] ?? '').isNotEmpty) 'publicKey': ServerCheck.realityKey(q['pbk']!),
         if ((q['sid'] ?? '').isNotEmpty) 'shortId': q['sid'],
         if ((q['spx'] ?? '').isNotEmpty) 'spiderX': q['spx'],
-        // The post-quantum verification key. sing-box has no field for this, which
-        // is the entire reason this config exists.
+        // The post-quantum verification key. sing-box has no field for this.
         if ((q['pqv'] ?? '').isNotEmpty) 'mldsa65Verify': q['pqv'],
       };
     } else if (security == 'tls') {
       stream['tlsSettings'] = {
         'serverName': q['sni'] ?? q['host'] ?? host,
-        if ((q['fp'] ?? '').isNotEmpty) 'fingerprint': q['fp'],
+        if (fingerprint.isNotEmpty) 'fingerprint': fingerprint,
         if ((q['alpn'] ?? '').isNotEmpty)
           'alpn': q['alpn']!.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
-        if (q['allowInsecure'] == '1') 'allowInsecure': true,
+        // Xray no longer takes `allowInsecure`, and refuses a config that has it. A
+        // self-signed server is reached by naming its certificate instead.
+        if ((q['pcs'] ?? '').isNotEmpty) 'pinnedPeerCertSha256': q['pcs'],
+        if ((q['vcn'] ?? '').isNotEmpty) 'verifyPeerCertByName': q['vcn'],
+        if ((q['ech'] ?? '').isNotEmpty) 'echConfigList': q['ech'],
       };
     }
 
@@ -231,7 +241,30 @@ class XrayConfig {
           if ((q['path'] ?? '').isNotEmpty) 'path': q['path'],
           if ((q['host'] ?? '').isNotEmpty) 'host': q['host'],
         };
+      case 'xhttp' || 'splithttp':
+        stream['xhttpSettings'] = {
+          if ((q['path'] ?? '').isNotEmpty) 'path': q['path'],
+          if ((q['host'] ?? '').isNotEmpty) 'host': q['host'],
+          if ((q['mode'] ?? '').isNotEmpty) 'mode': q['mode'],
+          'extra': ?_extra(q['extra'] ?? ''),
+        };
     }
     return stream;
+  }
+
+  /// XHTTP's remaining settings, which a link carries as one JSON object.
+  ///
+  /// Null when there is none to read. A link written by a form encoder has its spaces
+  /// as pluses, and those are the only pluses that make JSON unreadable.
+  static Map<String, Object?>? _extra(String value) {
+    if (value.isEmpty) return null;
+    for (final text in {value, value.replaceAll('+', ' ')}) {
+      try {
+        if (jsonDecode(text) case final Map<String, Object?> extra) return extra;
+      } on FormatException {
+        continue;
+      }
+    }
+    return null;
   }
 }

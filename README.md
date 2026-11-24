@@ -45,11 +45,11 @@ signing key match.
 | <img src="https://cdn.simpleicons.org/flutter/02569B" alt="Flutter" width="22" height="22"> | UI | Flutter 3.47, Dart, Material 3 |
 | <img src="https://cdn.simpleicons.org/kotlin/7F52FF" alt="Kotlin" width="22" height="22"> | Bridge | Kotlin, `MethodChannel` and `EventChannel` |
 | <img src="https://cdn.simpleicons.org/android/3DDC84" alt="Android" width="22" height="22"> | Tunnel | Android `VpnService`, as a foreground service |
-| <img src="https://cdn.simpleicons.org/go/00ADD8" alt="Go" width="22" height="22"> | Cores | sing-box 1.14.4, Xray-core v26.10.21 and amneziawg-go v3, compiled into one gomobile `.aar` |
+| <img src="https://cdn.simpleicons.org/go/00ADD8" alt="Go" width="22" height="22"> | Cores | sing-box 1.14.4, Xray-core v26.11.9 and amneziawg-go v3, compiled into one gomobile `.aar` |
 
 sing-box carries every tunnel. Xray-core and amneziawg-go take the servers it cannot
-run (post-quantum REALITY, AmneziaWG) behind a loopback proxy that sing-box dials, so
-DNS, routing and per-app rules stay in one place.
+run (post-quantum REALITY, XHTTP, VLESS encryption, AmneziaWG) behind a loopback proxy
+that sing-box dials, so DNS, routing and per-app rules stay in one place.
 
 ## Build
 

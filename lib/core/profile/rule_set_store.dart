@@ -38,7 +38,16 @@ class RuleSetStore {
     final base = _override ?? await getApplicationSupportDirectory();
     final dir = Directory('${base.path}/rule-sets');
     await dir.create(recursive: true);
-    return _dir = dir;
+    if (_dir case final resolved?) return resolved;
+    _dir = dir;
+    // Whatever a download was writing when the app was last killed. Best effort: a
+    // file that will not go is only wasted space.
+    try {
+      for (final entry in dir.listSync()) {
+        if (entry is File && entry.path.endsWith('.tmp')) entry.deleteSync();
+      }
+    } on FileSystemException catch (_) {}
+    return dir;
   }
 
   Future<File> fileFor(RuleSetPreset preset) async =>
@@ -104,41 +113,64 @@ class RuleSetStore {
     return failed;
   }
 
+  /// Downloads under way, by what they fetch and where it goes.
+  ///
+  /// A download outlives the connect that stopped waiting for it, so the next connect
+  /// used to start the same one again beside it.
+  final Map<String, Future<void>> _downloads = {};
+
+  int _attempts = 0;
+
+  Future<void> _download(String url, File target, {bool allowInsecure = false}) {
+    final key = '$url $allowInsecure ${target.path}';
+    return _downloads[key] ??= _fetch(url, target, allowInsecure: allowInsecure).whenComplete(() {
+      // A body, not an arrow: that would hand whenComplete the download itself, to be
+      // waited for before it can be done.
+      _downloads.remove(key);
+    });
+  }
+
   /// Temp-then-rename: a partial `.srs` would be read as a corrupt rule set and take
-  /// the whole config down with it.
-  Future<void> _download(String url, File target, {bool allowInsecure = false}) async {
+  /// the whole config down with it. The temp file is this download's own, so two that
+  /// are after the same list from different mirrors cannot write into each other.
+  Future<void> _fetch(String url, File target, {required bool allowInsecure}) async {
     final client = HttpClient()..connectionTimeout = _timeout;
     // A self-signed mirror is the reachable case for this; see the setting.
     if (allowInsecure) client.badCertificateCallback = (_, _, _) => true;
+    final temp = File('${target.path}.${++_attempts}.tmp');
     try {
       final request = await client.getUrl(Uri.parse(url)).timeout(_timeout);
       final response = await request.close().timeout(_timeout);
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException('HTTP ${response.statusCode} for $url');
       }
-      final temp = File('${target.path}.tmp');
-      try {
-        var received = 0;
-        await response
-            .map((chunk) {
-              received += chunk.length;
-              if (received > maxBytes) {
-                throw HttpException('\$url is larger than a rule set should be');
-              }
-              return chunk;
-            })
-            .pipe(temp.openWrite())
-            .timeout(_timeout);
-        if (temp.lengthSync() == 0) throw const HttpException('empty rule set');
-        await temp.rename(target.path);
-      } catch (_) {
-        // Leaving the partial file behind would have it retried as a complete one
-        // the next time round, and a truncated rule set is a fatal config error.
-        if (temp.existsSync()) await temp.delete();
-        rethrow;
-      }
+      await _receive(response, temp, url).timeout(_timeout);
+      if (temp.lengthSync() == 0) throw const HttpException('empty rule set');
+      await temp.rename(target.path);
+    } catch (_) {
+      // Leaving the partial file behind would have it retried as a complete one
+      // the next time round, and a truncated rule set is a fatal config error.
+      if (temp.existsSync()) await temp.delete();
+      rethrow;
     } finally {
       client.close(force: true);
+    }
+  }
+
+  static Future<void> _receive(HttpClientResponse response, File target, String url) async {
+    final sink = target.openWrite();
+    try {
+      var received = 0;
+      await for (final chunk in response) {
+        received += chunk.length;
+        if (received > maxBytes) {
+          throw HttpException('$url is larger than a rule set should be');
+        }
+        sink.add(chunk);
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
     }
   }
 

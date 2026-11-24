@@ -53,20 +53,36 @@ class SubscriptionUsage {
     int? number(String key) {
       final raw = fields[key];
       if (raw == null || raw.isEmpty) return null;
-      return int.tryParse(raw) ?? double.tryParse(raw)?.round();
+      final value = double.tryParse(raw);
+      // Out of range is how some providers write "unlimited", and "Infinity" and "NaN"
+      // both parse. None of them is a figure to show.
+      if (value == null || !value.isFinite || value.abs() > _largestNumber) return null;
+      return int.tryParse(raw) ?? value.round();
     }
 
-    final expire = number('expire');
     return SubscriptionUsage(
       upload: number('upload'),
       download: number('download'),
       total: number('total'),
-      // Seconds since the epoch. Zero is how several providers say "never expires".
-      expiresAt: (expire == null || expire <= 0)
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(expire * 1000),
+      expiresAt: _expiry(number('expire')),
     );
   }
+
+  /// An exabyte, which is also small enough for upload and download to be added up.
+  static const _largestNumber = 1 << 60;
+
+  /// Seconds since the epoch, or milliseconds from the providers that send those. Zero
+  /// is how several say "never expires".
+  static DateTime? _expiry(int? value) {
+    if (value == null || value <= 0) return null;
+    // The year 5138: no plan runs that long, so anything past it was not seconds.
+    final milliseconds = value < 100000000000 ? value * 1000 : value;
+    if (milliseconds > _lastDateTime) return null;
+    return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+
+  /// As far as a [DateTime] reaches; anything later makes its constructor throw.
+  static const _lastDateTime = 8640000000000000;
 
   Map<String, Object?> toJson() => {
     'upload': upload,
@@ -147,6 +163,7 @@ class ProfileData {
     this.autoCheckIp = false,
     this.crashReports = false,
     this.insecureDownloads = false,
+    this.damaged = false,
   });
 
   final List<Outbound> servers;
@@ -196,6 +213,10 @@ class ProfileData {
   /// subscription means the credentials it runs on.
   final bool insecureDownloads;
 
+  /// True when part of the saved document could not be read. Never written: it says
+  /// something about this launch, so the user can be told once.
+  final bool damaged;
+
   Outbound? get selected {
     if (servers.isEmpty) return null;
     for (final s in servers) {
@@ -233,6 +254,7 @@ class ProfileData {
     autoCheckIp: autoCheckIp ?? this.autoCheckIp,
     crashReports: crashReports ?? this.crashReports,
     insecureDownloads: insecureDownloads ?? this.insecureDownloads,
+    damaged: damaged,
   );
 }
 
@@ -249,7 +271,8 @@ class ProfileStore {
 
   /// v2 added the original share link and the Xray flag to each server.
   /// v3 persists tunnel settings, which until then lived only in memory.
-  static const _schemaVersion = 3;
+  /// v4 reads every share link again, since until then some were read wrong.
+  static const _schemaVersion = 4;
   static const _fileName = 'profiles.json';
 
   File? _file;
@@ -287,49 +310,113 @@ class ProfileStore {
     'insecureDownloads': data.insecureDownloads,
   };
 
-  /// Rejects a document from a newer schema rather than silently dropping the
-  /// fields it does not understand.
-  ProfileData decode(Map<String, Object?> map) {
-    final version = (map['version'] as num?)?.toInt() ?? 0;
-    if (version > _schemaVersion) throw const BackupTooNewException();
+  /// Rejects a document from a newer schema rather than silently dropping the fields it
+  /// does not understand, and one that cannot be read in full.
+  ///
+  /// Given [problems], it keeps what it can instead and says there what it could not:
+  /// one unreadable server is no reason to lose the others.
+  ProfileData decode(Map<String, Object?> map, {List<Object>? problems}) {
+    T? attempt<T>(T? Function() read) {
+      try {
+        return read();
+      } catch (e) {
+        if (problems == null) rethrow;
+        problems.add(e);
+        return null;
+      }
+    }
+
+    List<T> each<T>(String key, T Function(Map<String, Object?> map) read) => [
+      for (final entry in attempt(() => map[key] as List?) ?? const [])
+        ?attempt(() => read((entry as Map).cast<String, Object?>())),
+    ];
+
+    final version = attempt(() => (map['version'] as num?)?.toInt()) ?? 0;
+    if (version > _schemaVersion) {
+      if (problems == null) throw const BackupTooNewException();
+      problems.add(const BackupTooNewException());
+    }
+    final servers = each('servers', Outbound.fromStorage);
     return ProfileData(
       // Up to 1.1.2 a subscription refresh could save two servers under one name,
       // which the core refuses to start with. Such a profile is mended as it loads.
-      servers: Outbound.withUniqueTags([
-        for (final e in map['servers'] as List? ?? [])
-          Outbound.fromStorage((e as Map).cast<String, Object?>()),
-      ]),
-      subscriptions: (map['subscriptions'] as List? ?? [])
-          .map((e) => Subscription.fromJson((e as Map).cast<String, Object?>()))
-          .toList(),
-      selectedTag: map['selectedTag'] as String?,
-      needsReimport: version < 2 && (map['servers'] as List? ?? []).isNotEmpty,
-      settings: map['settings'] == null
-          ? null
-          : ConfigBuilder.fromJson((map['settings'] as Map).cast<String, Object?>()),
-      localeCode: map['localeCode'] as String?,
-      themeModeName: map['themeMode'] as String? ?? 'system',
-      hapticFeedback: map['hapticFeedback'] as bool? ?? true,
-      autoCheckIp: map['autoCheckIp'] as bool? ?? false,
-      crashReports: map['crashReports'] as bool? ?? false,
-      insecureDownloads: map['insecureDownloads'] as bool? ?? false,
+      servers: Outbound.withUniqueTags(
+        version < 4 ? [for (final server in servers) _readAgain(server)] : servers,
+      ),
+      subscriptions: each('subscriptions', Subscription.fromJson),
+      selectedTag: attempt(() => map['selectedTag'] as String?),
+      needsReimport: version < 2 && servers.isNotEmpty,
+      settings: attempt(
+        () => map['settings'] == null
+            ? null
+            : ConfigBuilder.fromJson((map['settings'] as Map).cast<String, Object?>()),
+      ),
+      localeCode: attempt(() => map['localeCode'] as String?),
+      themeModeName: attempt(() => map['themeMode'] as String?) ?? 'system',
+      hapticFeedback: attempt(() => map['hapticFeedback'] as bool?) ?? true,
+      autoCheckIp: attempt(() => map['autoCheckIp'] as bool?) ?? false,
+      crashReports: attempt(() => map['crashReports'] as bool?) ?? false,
+      insecureDownloads: attempt(() => map['insecureDownloads'] as bool?) ?? false,
+      damaged: problems != null && problems.isNotEmpty,
     );
   }
 
-  /// Reads the saved document, or an empty one when there is nothing readable.
+  /// The server its own link describes, as it is read today.
+  ///
+  /// A subscription is read again every half a day, but a server added by hand keeps
+  /// whatever the parser made of its link at the time — a `+` in a key read as a space,
+  /// say — for good. Its name and where it came from are the user's, and stay.
+  static Outbound _readAgain(Outbound stored) {
+    final link = stored.link;
+    final parsed = link == null ? null : ShareLink.parse(link);
+    if (parsed == null || parsed.type != stored.type) return stored;
+    return parsed.copyWith(tag: stored.tag, subscriptionId: stored.subscriptionId, link: link);
+  }
+
+  /// Reads the saved document, or as much of it as is readable.
   ///
   /// Parsing lives entirely in [decode] — this used to repeat it, and a field added
   /// to one and not the other is exactly the kind of bug that only shows up as
   /// settings quietly not surviving a restart.
   Future<ProfileData> load() async {
+    final File file;
     try {
-      final file = await _resolveFile();
+      file = await _resolveFile();
       if (!file.existsSync()) return const ProfileData();
-      return decode((await _decodeOffThread(await file.readAsString())).cast<String, Object?>());
     } catch (_) {
-      // A corrupt file, or a document from a newer schema, must not brick the app.
-      // Start clean; the file is replaced on the next save.
       return const ProfileData();
+    }
+    final problems = <Object>[];
+    ProfileData data;
+    var version = _schemaVersion;
+    try {
+      final map = (await _decodeOffThread(await file.readAsString())).cast<String, Object?>();
+      data = decode(map, problems: problems);
+      if (map['version'] case final num value) version = value.toInt();
+    } catch (_) {
+      // A corrupt file must not brick the app: start clean.
+      data = const ProfileData(damaged: true);
+    }
+    if (data.damaged) {
+      await _setAside(file);
+    } else if (version < _schemaVersion && !data.needsReimport) {
+      // Written back now, so the upgrade is done once rather than on every launch
+      // until something else happens to save. Not for a profile that still has to be
+      // imported again: the old version is what says so.
+      save(data).ignore();
+    }
+    return data;
+  }
+
+  /// Keeps a copy of a document that could not be read in full.
+  ///
+  /// The next save replaces it, and until this existed a damaged file was every server
+  /// gone for good. One copy, the latest; an empty file has nothing worth keeping.
+  Future<void> _setAside(File file) async {
+    try {
+      if (file.lengthSync() > 0) await file.copy('${file.path}.corrupt');
+    } catch (_) {
+      // Storage that cannot be written to. There is nothing else to try.
     }
   }
 

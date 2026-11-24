@@ -82,6 +82,36 @@ void main() {
     });
   });
 
+  // A server that accepts the connection and then says nothing, which is what a tunnel
+  // carrying nothing looks like from here. Connecting was the only step with a limit,
+  // so the test ran for good.
+  group('a server that never answers', () {
+    SpeedTest impatient() => SpeedTest(
+      latencyUrl: '$origin/204',
+      downloadUrl: '$origin/down',
+      uploadUrl: '$origin/up',
+      budget: const Duration(milliseconds: 300),
+      patience: const Duration(milliseconds: 300),
+      samples: 3,
+    );
+
+    setUp(() => serve((request) => Completer<void>().future));
+
+    test('ends the latency test, and after one wait rather than three', () async {
+      final clock = Stopwatch()..start();
+      expect(await impatient().latency(), isNull);
+      expect(clock.elapsedMilliseconds, lessThan(800));
+    });
+
+    test('ends the download', () async {
+      expect(await impatient().download().timeout(const Duration(seconds: 5)), isNull);
+    });
+
+    test('ends the upload', () async {
+      await impatient().upload().timeout(const Duration(seconds: 5));
+    });
+  });
+
   group('download', () {
     test('measures what actually arrived', () async {
       final payload = Uint8List(2 * 1024 * 1024);

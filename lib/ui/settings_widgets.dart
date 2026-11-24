@@ -194,25 +194,30 @@ Future<void> pickLanguage(BuildContext context, String? current) async {
   final codes = AppLocalizations.supportedLocales.map((e) => e.languageCode).toList()
     ..sort((a, b) => (_languageNames[a] ?? a).compareTo(_languageNames[b] ?? b));
 
-  final choice = await showDialog<String?>(
+  // Null is what a dismissed dialog returns, so "follow the device" has to be something
+  // else: as null too, opening this and backing out put the language back to it.
+  const device = '';
+  final choice = await showDialog<String>(
     context: context,
     builder: (context) => SimpleDialog(
       title: Text(l10n.language),
       children: [
-        RadioGroup<String?>(
-          groupValue: current,
+        RadioGroup<String>(
+          groupValue: current ?? device,
           onChanged: (value) => Navigator.of(context).pop(value),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              RadioListTile<String?>(value: null, title: Text(l10n.languageSystem)),
+              RadioListTile<String>(value: device, title: Text(l10n.languageSystem)),
               for (final code in codes)
-                RadioListTile<String?>(value: code, title: Text(_languageNames[code] ?? code)),
+                RadioListTile<String>(value: code, title: Text(_languageNames[code] ?? code)),
             ],
           ),
         ),
       ],
     ),
   );
-  if (choice != current) await controller.setLocale(choice);
+  if (choice == null) return;
+  final locale = choice == device ? null : choice;
+  if (locale != current) await controller.setLocale(locale);
 }

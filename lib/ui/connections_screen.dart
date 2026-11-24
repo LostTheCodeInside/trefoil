@@ -5,6 +5,7 @@ import '../core/tunnel_status.dart';
 import '../l10n/app_localizations.dart';
 import 'app_icon.dart';
 import 'app_shell.dart';
+import 'error_text.dart';
 
 /// What the tunnel is carrying right now, and through which outbound.
 ///
@@ -38,6 +39,50 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
         .catchError((Object _) {});
   }
 
+  /// Asked about first: the button is one tap from a screen meant for looking, and
+  /// what it ends cannot be given back.
+  Future<void> _closeAll() async {
+    final l10n = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.connectionsCloseAllTitle),
+        content: Text(l10n.connectionsCloseAllBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10n.actionCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10n.connectionsCloseAll),
+          ),
+        ],
+      ),
+    );
+    if (!(confirmed ?? false) || !mounted) return;
+    await _tell(TunnelChannel.instance.closeConnections(), l10n.connectionsClosed);
+  }
+
+  Future<void> _close(ActiveConnection connection) => _tell(
+    TunnelChannel.instance.closeConnection(connection.id),
+    AppLocalizations.of(context).connectionClosed(connection.target),
+  );
+
+  Future<void> _tell(Future<void> work, String done) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    var message = done;
+    try {
+      await work;
+    } catch (e) {
+      message = describeError(l10n, e);
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message), behavior: SnackBarBehavior.floating));
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -48,7 +93,7 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
           IconButton(
             icon: const Icon(Icons.link_off),
             tooltip: l10n.connectionsCloseAll,
-            onPressed: () => TunnelChannel.instance.closeConnections(),
+            onPressed: _closeAll,
           ),
         ],
       ),
@@ -70,8 +115,11 @@ class _ConnectionsScreenState extends State<ConnectionsScreen> {
               padding: EdgeInsets.only(bottom: bottomInset(context)),
               itemCount: items.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, index) =>
-                  _ConnectionTile(connection: items[index], labels: _labels),
+              itemBuilder: (context, index) => _ConnectionTile(
+                connection: items[index],
+                labels: _labels,
+                onClose: () => _close(items[index]),
+              ),
             ),
           );
         },
@@ -99,10 +147,11 @@ class _Empty extends StatelessWidget {
 }
 
 class _ConnectionTile extends StatelessWidget {
-  const _ConnectionTile({required this.connection, required this.labels});
+  const _ConnectionTile({required this.connection, required this.labels, required this.onClose});
 
   final ActiveConnection connection;
   final Map<String, String> labels;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -128,38 +177,48 @@ class _ConnectionTile extends StatelessWidget {
       // never have an icon to put in it.
       leading: package.isEmpty ? null : AppIcon(package, size: 32),
       title: Text(connection.target, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        parts.join(' · '),
-        semanticsLabel: parts.join(', '),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
+      isThreeLine: true,
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            connection.outbound.isEmpty ? '—' : connection.outbound,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: direct ? scheme.tertiary : scheme.primary,
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: connection.outbound.isEmpty ? '—' : connection.outbound,
+                  semanticsLabel: connection.outbound.isEmpty ? l10n.noReadingYet : null,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    color: direct ? scheme.tertiary : scheme.primary,
+                  ),
+                ),
+                if (parts.isNotEmpty)
+                  TextSpan(
+                    text: ' · ${parts.join(' · ')}',
+                    semanticsLabel: ', ${parts.join(', ')}',
+                  ),
+              ],
             ),
-            semanticsLabel: connection.outbound.isEmpty ? l10n.noReadingYet : null,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           // The arrows carry the whole meaning of the two figures and a screen
           // reader does not read them, so spoken it would be two byte counts in a
           // row with no way to tell which direction either belongs to.
           Text(
-            '↑${formatBytes(connection.uplink)} ↓${formatBytes(connection.downlink)}',
-            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            '↑ ${formatBytes(connection.uplink)}  ↓ ${formatBytes(connection.downlink)}',
             semanticsLabel:
                 '${l10n.upload} ${formatBytes(connection.uplink)}, '
                 '${l10n.download} ${formatBytes(connection.downlink)}',
           ),
         ],
       ),
-      onLongPress: () => TunnelChannel.instance.closeConnection(connection.id),
+      trailing: IconButton(
+        icon: const Icon(Icons.close, size: 20),
+        tooltip: l10n.connectionClose,
+        onPressed: onClose,
+      ),
     );
   }
 }

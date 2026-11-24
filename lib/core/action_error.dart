@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'profile/profile_store.dart';
+import 'profile/server_check.dart';
 import 'tunnel_channel.dart';
 
 /// Why something the user asked for did not happen: a [kind] the UI can say in the
@@ -12,7 +13,7 @@ import 'tunnel_channel.dart';
 /// — in Persian, Russian, Chinese — then read in a snackbar at exactly the moment
 /// something had gone wrong. The sentence is now the UI's job; this only sorts.
 class ActionError {
-  const ActionError(this.kind, {this.subject = '', this.detail = '', this.cause});
+  const ActionError(this.kind, {this.subject = '', this.detail = '', this.problem, this.cause});
 
   /// Sorts any exception into a kind. Anything unrecognised keeps its own text as
   /// detail, so nothing is ever reduced to a bare "something went wrong".
@@ -65,13 +66,21 @@ class ActionError {
   /// Appended to the translated sentence rather than translated.
   final String detail;
 
+  /// What is wrong with the server in [subject], for [ActionErrorKind.serverUnsupported].
+  final ServerProblem? problem;
+
   /// The failure underneath, for a sentence that says what was being attempted:
   /// "Could not register with Cloudflare" because the network was unreachable.
   final ActionError? cause;
 
   @override
-  String toString() =>
-      [kind.name, subject, detail, ?cause?.toString()].where((part) => part.isNotEmpty).join(': ');
+  String toString() => [
+    kind.name,
+    subject,
+    detail,
+    ?problem?.toString(),
+    ?cause?.toString(),
+  ].where((part) => part.isNotEmpty).join(': ');
 }
 
 enum ActionErrorKind {
@@ -83,6 +92,7 @@ enum ActionErrorKind {
   warpNotOn,
   warpRegistration,
   saveFailed,
+  profileDamaged,
   ruleSetsUnavailable,
   notALink,
   wireGuardIncomplete,

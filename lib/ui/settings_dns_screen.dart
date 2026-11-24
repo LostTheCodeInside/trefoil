@@ -59,7 +59,9 @@ class DnsSettingsScreen extends StatelessWidget {
                   // This is the resolver that resolves hostnames, so a hostname here
                   // has nothing to resolve it: sing-box refuses the config and the
                   // tunnel never starts. Caught at the keyboard instead.
-                  return ConfigBuilder.isIpLiteral(_hostOf(value)) ? null : l10n.directDnsMustBeIp;
+                  return ConfigBuilder.isIpLiteral(ConfigBuilder.dnsHost(value))
+                      ? null
+                      : l10n.directDnsMustBeIp;
                 },
               );
               if (value == null || !context.mounted) return;
@@ -132,14 +134,5 @@ class DnsSettingsScreen extends StatelessWidget {
 
   /// A host, with or without a scheme. Rejects the shapes sing-box would refuse at
   /// start, which is otherwise a tunnel that simply will not come up.
-  static String _hostOf(String value) {
-    final uri = Uri.tryParse(value.contains('://') ? value : 'tls://$value');
-    return uri == null || uri.host.isEmpty ? value : uri.host;
-  }
-
-  static bool _validUrl(String value) {
-    if (value.contains(' ')) return false;
-    final uri = Uri.tryParse(value.contains('://') ? value : 'tls://$value');
-    return uri != null && uri.host.isNotEmpty;
-  }
+  static bool _validUrl(String value) => ConfigBuilder.isDnsAddress(value);
 }

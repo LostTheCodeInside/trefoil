@@ -37,6 +37,39 @@ void main() {
     }).toList();
   }
 
+  // The first match wins, so the order is the meaning. Rules were gathered by what they
+  // did, which carried a later one past whatever stood between.
+  group('order', () {
+    RoutingRule rule(String value, RuleAction action) =>
+        RoutingRule(match: RuleMatch.domainSuffix, value: value, action: action);
+
+    test('is the order they are listed in', () {
+      final rules = rulesFor([
+        rule('a.example', RuleAction.direct),
+        rule('example', RuleAction.block),
+        rule('b.example', RuleAction.direct),
+      ]);
+      expect(
+        [for (final r in rules) r['domain_suffix']],
+        [
+          ['a.example'],
+          ['example'],
+          ['b.example'],
+        ],
+      );
+    });
+
+    test('neighbours that do the same are still one rule', () {
+      final rules = rulesFor([
+        rule('a.example', RuleAction.direct),
+        rule('b.example', RuleAction.direct),
+        rule('c.example', RuleAction.block),
+      ]);
+      expect(rules, hasLength(2));
+      expect(rules.first['domain_suffix'], ['a.example', 'b.example']);
+    });
+  });
+
   group('value typing', () {
     test('ports are numbers, and repeats collapse into one rule', () {
       final rules = rulesFor(const [

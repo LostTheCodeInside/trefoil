@@ -244,8 +244,6 @@ class RuleSetOrigin {
 class RuleSetPreset {
   const RuleSetPreset({
     required this.id,
-    required this.label,
-    required this.description,
     required this.action,
     required this.isIpSet,
     this.defaultOn = false,
@@ -253,8 +251,6 @@ class RuleSetPreset {
   });
 
   final String id;
-  final String label;
-  final String description;
   final RuleAction action;
 
   /// Null for the ones SagerNet publishes, which is nearly all of them.
@@ -313,85 +309,30 @@ class RuleSetPreset {
   static const catalog = <RuleSetPreset>[
     RuleSetPreset(
       id: 'geosite-category-ads-all',
-      label: 'Block ads & trackers',
-      description: 'Drops requests to known advertising and tracking domains',
       action: RuleAction.block,
       isIpSet: false,
       defaultOn: true,
     ),
     RuleSetPreset(
       id: 'geosite-ads-extended',
-      label: 'Block ads & trackers — large list',
-      description: 'About 187,000 domains from AdGuard and EasyList, rebuilt daily',
       action: RuleAction.block,
       isIpSet: false,
       origin: RuleSetOrigin.loyalsoldierAds,
     ),
-    RuleSetPreset(
-      id: 'geoip-id',
-      label: 'Indonesian IPs go direct',
-      description: 'Local services skip the proxy, so they stay fast',
-      action: RuleAction.direct,
-      isIpSet: true,
-      defaultOn: true,
-    ),
+    RuleSetPreset(id: 'geoip-id', action: RuleAction.direct, isIpSet: true, defaultOn: true),
     RuleSetPreset(
       id: 'geosite-private',
-      label: 'Local domains go direct',
-      description: 'Intranet and .local names resolve on your own network',
       action: RuleAction.direct,
       isIpSet: false,
       defaultOn: true,
     ),
-    RuleSetPreset(
-      id: 'geosite-cn',
-      label: 'Chinese sites go direct',
-      description: 'Skip the proxy for mainland Chinese domains',
-      action: RuleAction.direct,
-      isIpSet: false,
-    ),
-    RuleSetPreset(
-      id: 'geoip-cn',
-      label: 'Chinese IPs go direct',
-      description: 'Pairs with the Chinese sites list',
-      action: RuleAction.direct,
-      isIpSet: true,
-    ),
-    RuleSetPreset(
-      id: 'geosite-category-ir',
-      label: 'Iranian sites go direct',
-      description: 'Skip the proxy for Iranian domains',
-      action: RuleAction.direct,
-      isIpSet: false,
-    ),
-    RuleSetPreset(
-      id: 'geoip-ir',
-      label: 'Iranian IPs go direct',
-      description: 'Pairs with the Iranian sites list',
-      action: RuleAction.direct,
-      isIpSet: true,
-    ),
-    RuleSetPreset(
-      id: 'geosite-category-ru',
-      label: 'Russian sites go direct',
-      description: 'Skip the proxy for Russian domains',
-      action: RuleAction.direct,
-      isIpSet: false,
-    ),
-    RuleSetPreset(
-      id: 'geoip-ru',
-      label: 'Russian IPs go direct',
-      description: 'Pairs with the Russian sites list',
-      action: RuleAction.direct,
-      isIpSet: true,
-    ),
-    RuleSetPreset(
-      id: 'geosite-category-porn',
-      label: 'Block adult sites',
-      description: 'Off by default',
-      action: RuleAction.block,
-      isIpSet: false,
-    ),
+    RuleSetPreset(id: 'geosite-cn', action: RuleAction.direct, isIpSet: false),
+    RuleSetPreset(id: 'geoip-cn', action: RuleAction.direct, isIpSet: true),
+    RuleSetPreset(id: 'geosite-category-ir', action: RuleAction.direct, isIpSet: false),
+    RuleSetPreset(id: 'geoip-ir', action: RuleAction.direct, isIpSet: true),
+    RuleSetPreset(id: 'geosite-category-ru', action: RuleAction.direct, isIpSet: false),
+    RuleSetPreset(id: 'geoip-ru', action: RuleAction.direct, isIpSet: true),
+    RuleSetPreset(id: 'geosite-category-porn', action: RuleAction.block, isIpSet: false),
   ];
 
   static RuleSetPreset? byId(String id) {

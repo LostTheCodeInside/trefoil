@@ -14,6 +14,8 @@ class RoutingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = TunnelScope.of(context);
     final l10n = AppLocalizations.of(context);
+    // Not one of the characters text direction turns around by itself.
+    final arrow = Directionality.of(context) == TextDirection.rtl ? '←' : '→';
     final routing = controller.routing;
     final unavailable = controller.unavailablePresets.map((e) => e.id).toSet();
 
@@ -46,9 +48,11 @@ class RoutingScreen extends StatelessWidget {
               for (final preset in RuleSetPreset.catalog)
                 SwitchListTile(
                   value: routing.enabledPresets.contains(preset.id),
-                  title: Text(preset.label),
+                  title: Text(preset.label(l10n)),
                   subtitle: Text(
-                    unavailable.contains(preset.id) ? l10n.presetUnavailable : preset.description,
+                    unavailable.contains(preset.id)
+                        ? l10n.presetUnavailable
+                        : preset.description(l10n),
                     style: unavailable.contains(preset.id)
                         ? TextStyle(color: Theme.of(context).colorScheme.error)
                         : null,
@@ -79,21 +83,7 @@ class RoutingScreen extends StatelessWidget {
                   ),
                   // A swipe is easy to start by accident while scrolling, and a rule holds
                   // typing nobody wants to repeat -- so the removal is offered back.
-                  onDismissed: (_) {
-                    controller.removeRuleAt(index);
-                    ScaffoldMessenger.of(context)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(l10n.ruleRemoved),
-                          behavior: SnackBarBehavior.floating,
-                          action: SnackBarAction(
-                            label: l10n.actionUndo,
-                            onPressed: () => controller.restoreRuleAt(index, rule),
-                          ),
-                        ),
-                      );
-                  },
+                  onDismissed: (_) => _removeRule(context, index, rule),
                   child: CheckboxListTile(
                     value: rule.enabled,
                     title: Text(rule.value),
@@ -102,7 +92,7 @@ class RoutingScreen extends StatelessWidget {
                     // tunnel starts fine and the rule simply never fires.
                     subtitle: Text(
                       rule.isValid
-                          ? '${rule.match.label(l10n)} → ${rule.action.label(l10n)}'
+                          ? '${rule.match.label(l10n)} $arrow ${rule.action.label(l10n)}'
                                 '${rule.server == null ? '' : ' · ${rule.server}'}'
                           : '${rule.match.label(l10n)} — ${l10n.ruleInvalid}',
                       style: rule.isValid
@@ -133,6 +123,26 @@ class RoutingScreen extends StatelessWidget {
       builder: (_) => _RuleSheet(index: index, existing: existing),
     );
   }
+}
+
+/// Removes a rule and offers it back: it holds typing nobody wants to repeat.
+void _removeRule(BuildContext context, int index, RoutingRule rule) {
+  final controller = TunnelScope.read(context)..removeRuleAt(index);
+  final l10n = AppLocalizations.of(context);
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(l10n.ruleRemoved),
+        behavior: SnackBarBehavior.floating,
+        persist: false,
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: l10n.actionUndo,
+          onPressed: () => controller.restoreRuleAt(index, rule),
+        ),
+      ),
+    );
 }
 
 class _Header extends StatelessWidget {
@@ -330,6 +340,20 @@ class _RuleSheetState extends State<_RuleSheet> {
             ],
             const SizedBox(height: 20),
             FilledButton(onPressed: _save, child: Text(_isEditing ? l10n.saveRule : l10n.addRule)),
+            // Swiping a rule away is the other way to remove it, and nothing on the
+            // list says that it can be done.
+            if (widget.index case final index?) ...[
+              const SizedBox(height: 4),
+              TextButton.icon(
+                onPressed: () {
+                  _removeRule(context, index, widget.existing!);
+                  Navigator.of(context).pop();
+                },
+                style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
+                icon: const Icon(Icons.delete_outline),
+                label: Text(l10n.actionRemove),
+              ),
+            ],
           ],
         ),
       ),

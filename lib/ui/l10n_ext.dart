@@ -52,3 +52,36 @@ extension TunnelStageText on TunnelStage {
     TunnelStage.stopped => l10n.stateNotConnected,
   };
 }
+
+/// A list added to the catalogue without a name here shows its id, and a test fails.
+extension RuleSetPresetText on RuleSetPreset {
+  String label(AppLocalizations l10n) => switch (id) {
+    'geosite-category-ads-all' => l10n.presetAds,
+    'geosite-ads-extended' => l10n.presetAdsLarge,
+    'geoip-id' => l10n.presetIndonesiaIps,
+    'geosite-private' => l10n.presetLocal,
+    'geosite-cn' => l10n.presetChinaSites,
+    'geoip-cn' => l10n.presetChinaIps,
+    'geosite-category-ir' => l10n.presetIranSites,
+    'geoip-ir' => l10n.presetIranIps,
+    'geosite-category-ru' => l10n.presetRussiaSites,
+    'geoip-ru' => l10n.presetRussiaIps,
+    'geosite-category-porn' => l10n.presetAdult,
+    _ => id,
+  };
+
+  String description(AppLocalizations l10n) => switch (id) {
+    'geosite-category-ads-all' => l10n.presetAdsBody,
+    'geosite-ads-extended' => l10n.presetAdsLargeBody,
+    'geoip-id' => l10n.presetIndonesiaIpsBody,
+    'geosite-private' => l10n.presetLocalBody,
+    'geosite-cn' => l10n.presetChinaSitesBody,
+    'geoip-cn' => l10n.presetChinaIpsBody,
+    'geosite-category-ir' => l10n.presetIranSitesBody,
+    'geoip-ir' => l10n.presetIranIpsBody,
+    'geosite-category-ru' => l10n.presetRussiaSitesBody,
+    'geoip-ru' => l10n.presetRussiaIpsBody,
+    'geosite-category-porn' => l10n.presetAdultBody,
+    _ => '',
+  };
+}

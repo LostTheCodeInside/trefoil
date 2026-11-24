@@ -20,6 +20,50 @@ void main() {
 
   String strategy(ConfigBuilder builder) => ((build(builder)['dns'] as Map)['strategy']) as String;
 
+  // sing-box takes the parts of an address separately. Only the host used to be passed
+  // on, so a provider that tells accounts apart by path answered as nobody's.
+  group('an address is taken apart', () {
+    Map<String, Object?> remote(String address) =>
+        dnsServer(base.copyWith(remoteDns: address), ConfigBuilder.dnsRemoteTag);
+
+    test('path', () {
+      final entry = remote('https://dns.example/abc123');
+      expect((entry['type'], entry['server'], entry['path']), ('https', 'dns.example', '/abc123'));
+    });
+
+    test('port', () {
+      final entry = remote('tls://1.1.1.1:8853');
+      expect((entry['type'], entry['server'], entry['server_port']), ('tls', '1.1.1.1', 8853));
+      expect(entry.containsKey('path'), isFalse);
+    });
+
+    test('a bare address with a port', () {
+      final entry = remote('9.9.9.9:9953');
+      expect((entry['type'], entry['server'], entry['server_port']), ('udp', '9.9.9.9', 9953));
+    });
+
+    test('IPv6, with and without brackets', () {
+      expect(remote('2606:4700:4700::1111')['server'], '2606:4700:4700::1111');
+      final entry = remote('[2606:4700:4700::1111]:53');
+      expect((entry['server'], entry['server_port']), ('2606:4700:4700::1111', 53));
+    });
+
+    test('nothing is added that was not written', () {
+      final entry = remote('https://dns.example');
+      expect(entry.containsKey('server_port'), isFalse);
+      expect(entry.containsKey('path'), isFalse);
+    });
+
+    test('what is not an address is not accepted as one', () {
+      for (final bad in ['', 'a b', 'https://', 'tls://1.1.1.1:99999']) {
+        expect(ConfigBuilder.isDnsAddress(bad), isFalse, reason: bad);
+      }
+      for (final good in ['1.1.1.1', 'tls://dns.example', '2606:4700:4700::1111', '[::1]:53']) {
+        expect(ConfigBuilder.isDnsAddress(good), isTrue, reason: good);
+      }
+    });
+  });
+
   group('direct resolver', () {
     test('empty means the network\'s own resolver', () {
       expect(dnsServer(base, ConfigBuilder.dnsDirectTag)['type'], 'local');

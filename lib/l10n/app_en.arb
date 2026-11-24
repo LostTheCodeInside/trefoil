@@ -43,7 +43,7 @@
   "serversEmptyTitle": "No servers yet",
   "serversEmptyBody": "Add a server with a share link, or import a subscription URL.",
   "serversNoMatches": "No server matches that search.",
-  "searchServers": "Search {count} servers",
+  "searchServers": "{count, plural, =1{Search 1 server} other{Search {count} servers}}",
   "@searchServers": {
     "placeholders": {
       "count": {
@@ -118,7 +118,7 @@
     }
   },
   "quotaExpired": "expired",
-  "quotaExpiresIn": "expires in {days} days",
+  "quotaExpiresIn": "{days, plural, =0{expires within a day} =1{expires in 1 day} other{expires in {days} days}}",
   "@quotaExpiresIn": {
     "placeholders": {
       "days": {
@@ -260,7 +260,7 @@
   "routingGlobalBody": "Send all traffic through the proxy",
   "rulesAndFiltering": "Rules & filtering",
   "rulesSummaryNone": "No rules active",
-  "rulesSummary": "{presets} preset(s), {rules} custom rule(s)",
+  "rulesSummary": "{presets, plural, =1{1 preset} other{{presets} presets}}, {rules, plural, =1{1 custom rule} other{{rules} custom rules}}",
   "@rulesSummary": {
     "placeholders": {
       "presets": {
@@ -273,7 +273,7 @@
   },
   "perAppProxy": "Per-app proxy",
   "perAppAll": "All apps use the tunnel",
-  "perAppIncluded": "{count} app(s) proxied",
+  "perAppIncluded": "{count, plural, =1{1 app proxied} other{{count} apps proxied}}",
   "@perAppIncluded": {
     "placeholders": {
       "count": {
@@ -281,7 +281,7 @@
       }
     }
   },
-  "perAppExcluded": "{count} app(s) bypassed",
+  "perAppExcluded": "{count, plural, =1{1 app bypassed} other{{count} apps bypassed}}",
   "@perAppExcluded": {
     "placeholders": {
       "count": {
@@ -505,7 +505,7 @@
   "fragmentPackets": "Packets",
   "fragmentLength": "Fragment size",
   "fragmentInterval": "Fragment delay",
-  "minutesValue": "{value} minutes",
+  "minutesValue": "{value, plural, =1{1 minute} other{{value} minutes}}",
   "@minutesValue": {
     "placeholders": {
       "value": {
@@ -595,7 +595,7 @@
   "copyLink": "Copy link",
   "exportServers": "Export servers",
   "exportServersBody": "Every server as a subscription list, ready to paste into this app or another client",
-  "exportServersDone": "{count} servers copied",
+  "exportServersDone": "{count, plural, =1{1 server copied} other{{count} servers copied}}",
   "@exportServersDone": {
     "placeholders": {
       "count": {
@@ -603,7 +603,7 @@
       }
     }
   },
-  "exportServersSkipped": "{count} had no share link and were left out",
+  "exportServersSkipped": "{count, plural, =1{1 had no share link and was left out} other{{count} had no share link and were left out}}",
   "@exportServersSkipped": {
     "placeholders": {
       "count": {
@@ -676,13 +676,13 @@
     }
   },
   "errorNoServer": "Add a server first",
-  "errorServerUnsupported": "{server} needs a feature neither core has: {feature}",
+  "errorServerUnsupported": "{server} cannot be used: {reason}",
   "@errorServerUnsupported": {
     "placeholders": {
       "server": {
         "type": "String"
       },
-      "feature": {
+      "reason": {
         "type": "String"
       }
     }
@@ -780,5 +780,104 @@
   "backupOpenFile": "Open file",
   "backupFromFile": "Backup loaded from a file",
   "backupRemoveFile": "Remove",
-  "appsShowSystem": "Show system apps"
+  "appsShowSystem": "Show system apps",
+  "errorProfileDamaged": "Part of the saved profile could not be read. The rest was kept, and a copy of the old file was set aside.",
+  "problemPlugin": "the {name} plugin is not part of this app",
+  "@problemPlugin": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemTransport": "the {name} transport is not supported",
+  "@problemTransport": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemInsecureTls": "it skips certificate checks, which Xray no longer allows",
+  "problemPort": "its port is not valid",
+  "problemCipher": "the cipher {name} is not supported",
+  "@problemCipher": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemFlow": "the flow {name} is not supported",
+  "@problemFlow": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemKey": "one of its keys is not valid",
+  "problemFingerprint": "the TLS fingerprint {name} is not supported",
+  "@problemFingerprint": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemObfs": "the obfuscation {name} is not supported",
+  "@problemObfs": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemCongestion": "the congestion control {name} is not supported",
+  "@problemCongestion": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "problemPath": "its path is not valid",
+  "hintWireGuardConf": "or the text of a WireGuard .conf",
+  "connectionsCloseAllTitle": "Close all connections?",
+  "connectionsCloseAllBody": "Apps usually reconnect on their own, but a call or download in progress is cut off.",
+  "connectionsClosed": "Connections closed",
+  "connectionClose": "Close connection",
+  "connectionClosed": "Closed the connection to {target}",
+  "@connectionClosed": {
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "backupReplaceTitle": "Replace everything in the app?",
+  "backupReplaceBody": "Every server, subscription, rule and setting here now is replaced by the backup. This cannot be undone.",
+  "settingNotSaved": "That setting could not be saved",
+  "presetAds": "Block ads & trackers",
+  "presetAdsBody": "Drops requests to known advertising and tracking domains",
+  "presetAdsLarge": "Block ads & trackers — large list",
+  "presetAdsLargeBody": "About 187,000 domains from AdGuard and EasyList, rebuilt daily",
+  "presetLocal": "Local domains go direct",
+  "presetLocalBody": "Intranet and .local names resolve on your own network",
+  "presetIndonesiaIps": "Indonesian IPs go direct",
+  "presetIndonesiaIpsBody": "Local services skip the proxy, so they stay fast",
+  "presetChinaSites": "Chinese sites go direct",
+  "presetChinaSitesBody": "Skip the proxy for mainland Chinese domains",
+  "presetChinaIps": "Chinese IPs go direct",
+  "presetChinaIpsBody": "Pairs with the Chinese sites list",
+  "presetIranSites": "Iranian sites go direct",
+  "presetIranSitesBody": "Skip the proxy for Iranian domains",
+  "presetIranIps": "Iranian IPs go direct",
+  "presetIranIpsBody": "Pairs with the Iranian sites list",
+  "presetRussiaSites": "Russian sites go direct",
+  "presetRussiaSitesBody": "Skip the proxy for Russian domains",
+  "presetRussiaIps": "Russian IPs go direct",
+  "presetRussiaIpsBody": "Pairs with the Russian sites list",
+  "presetAdult": "Block adult sites",
+  "presetAdultBody": "Drops requests to known adult domains"
 }

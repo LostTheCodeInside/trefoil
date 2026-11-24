@@ -123,6 +123,26 @@ class _BackupScreenState extends State<BackupScreen> with SingleTickerProviderSt
 
   Future<void> _import() async {
     final l10n = AppLocalizations.of(context);
+    // Asked before rather than undone after: what is here now is gone once the backup
+    // is in its place.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.backupReplaceTitle),
+        content: Text(l10n.backupReplaceBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10n.actionCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10n.backupRestore),
+          ),
+        ],
+      ),
+    );
+    if (!(confirmed ?? false) || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
