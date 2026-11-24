@@ -30,7 +30,7 @@ transitive ones.
 | [intl](https://pub.dev/packages/intl), [http](https://pub.dev/packages/http), [path_provider](https://pub.dev/packages/path_provider) | BSD-3-Clause |
 | [mobile_scanner](https://pub.dev/packages/mobile_scanner) | BSD-3-Clause |
 | [dynamic_color](https://pub.dev/packages/dynamic_color) | Apache-2.0 |
-| [yaml](https://pub.dev/packages/yaml), [cupertino_icons](https://pub.dev/packages/cupertino_icons) | MIT |
+| [yaml](https://pub.dev/packages/yaml) | MIT |
 
 ## Names
 
