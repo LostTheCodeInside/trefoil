@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-24
+
 ### Cores
 
 - Xray-core v26.11.9. sing-box 1.14.4 is still the newest stable release.
