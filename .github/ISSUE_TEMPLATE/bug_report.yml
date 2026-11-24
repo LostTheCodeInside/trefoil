@@ -1,0 +1,41 @@
+name: Bug report
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. Replace server addresses, keys, passwords and subscription
+        URLs with made-up ones before you post.
+  - type: input
+    id: version
+    attributes:
+      label: Trefoil version
+      description: Settings → About
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version
+      placeholder: Pixel 8, Android 16
+    validations:
+      required: true
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol and core
+      description: For a connection problem. The server list shows the core.
+      placeholder: VLESS with REALITY, sing-box
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did, what happened, what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: Settings → Log. Remove addresses and keys first.
+      render: text
