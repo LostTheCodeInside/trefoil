@@ -10,6 +10,10 @@
 #   ./scripts/release.sh
 #   ./scripts/release.sh --dry-run    # build into build/release/, publish nothing
 #
+# RELEASE_CHECK, when set, is a command run with the staged files as its arguments
+# before anything is published, a dry run included. If it fails, nothing goes out:
+#   RELEASE_CHECK=./my-scan.sh ./scripts/release.sh
+#
 # Needs the GitHub CLI (`gh`), signed in with write access to $REPO.
 #
 # The release key never leaves this machine. GitHub only ever holds signed APKs, and
@@ -143,6 +147,12 @@ with open(os.path.join(stage, "latest.json"), "w", encoding="utf-8") as out:
     }, out, indent=2, ensure_ascii=False)
     out.write("\n")
 PY
+
+# The last look at exactly the files that are about to be uploaded. Unquoted on
+# purpose: the variable may hold a command and its arguments.
+if [[ -n "${RELEASE_CHECK:-}" ]]; then
+  $RELEASE_CHECK "$STAGE"/* || die "RELEASE_CHECK refused the staged files; nothing was published"
+fi
 
 if ((dry_run)); then
   echo "release: dry run; $name (build $build) is ready in $STAGE/"

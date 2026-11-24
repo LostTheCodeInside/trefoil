@@ -83,6 +83,9 @@ release, signed with the local release key, which never leaves the machine:
 ./scripts/release.sh --dry-run   # build and write build/release/, publish nothing
 ```
 
+Set `RELEASE_CHECK` to a command to have it run on the staged files before anything is
+published; if it fails, the release stops.
+
 It needs the GitHub CLI signed in with write access to the repository. A fork that
 publishes its own builds has to change `REPO` and `RELEASE_CERT_SHA256` in that script,
 and `releaseManifestUrl` in `lib/core/app_update.dart`.
