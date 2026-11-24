@@ -1,0 +1,9 @@
+# English is the template: it is where new strings are added first, and the
+# generator uses it to decide what every other locale must provide.
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+# A missing Indonesian string falls back to English rather than showing the key,
+# so a half-finished translation degrades quietly instead of breaking the screen.
+untranslated-messages-file: lib/l10n/untranslated.json
+nullable-getter: false

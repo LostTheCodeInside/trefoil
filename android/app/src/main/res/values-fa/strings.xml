@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">اتصال یا قطع تونل</string>
+    <string name="status_connected">متصل</string>
+    <string name="status_connecting">در حال اتصال…</string>
+    <string name="status_disconnecting">در حال قطع…</string>
+    <string name="status_not_connected">متصل نیست</string>
+    <string name="widget_tap_to_connect">برای اتصال ضربه بزنید</string>
+    <string name="action_disconnect">قطع اتصال</string>
+    <string name="error_vpn_revoked">مجوز VPN لغو شد</string>
+    <string name="error_core_gave_up">هسته پاسخ نمی‌دهد و راه‌اندازی دوباره‌اش ممکن نشد. دوباره وصل شوید.</string>
+    <string name="channel_tunnel_status">وضعیت تونل</string>
+    <string name="channel_core_messages">پیام‌های هسته</string>
+</resources>

@@ -1,0 +1,6 @@
+tags:
+  # Runs the generated configs through the real sing-box binary. Slower than the
+  # rest put together, and silently skipped when tool/sing-box is not built, so it
+  # is named to make `--exclude-tags smoke` available while iterating.
+  smoke:
+    timeout: 2x

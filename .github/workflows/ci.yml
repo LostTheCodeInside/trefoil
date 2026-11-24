@@ -1,0 +1,39 @@
+# Analyse and test on every push and pull request.
+#
+# The native cores are deliberately not built here. Producing libcores.aar takes about
+# fifteen minutes and needs the Android NDK, for a change that is almost always Dart.
+# The tests that need a core skip themselves when it is absent.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Actions are pinned to a commit: a tag can be moved, a commit cannot.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+      # The analyzer needs generated files that only exist after resolution.
+      - run: flutter pub get
+      # Warnings are failures: the repo is at zero and should stay there.
+      - run: flutter analyze --fatal-infos --fatal-warnings
+      - run: dart format --output=none --set-exit-if-changed lib test tool
+      - run: flutter test

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">Подключить или отключить туннель</string>
+    <string name="status_connected">Подключено</string>
+    <string name="status_connecting">Подключение…</string>
+    <string name="status_disconnecting">Отключение…</string>
+    <string name="status_not_connected">Не подключено</string>
+    <string name="widget_tap_to_connect">Нажмите, чтобы подключиться</string>
+    <string name="action_disconnect">Отключить</string>
+    <string name="error_vpn_revoked">Разрешение VPN отозвано</string>
+    <string name="error_core_gave_up">Ядро перестало отвечать, и перезапустить его не удалось. Попробуйте подключиться снова.</string>
+    <string name="channel_tunnel_status">Состояние туннеля</string>
+    <string name="channel_core_messages">Сообщения ядра</string>
+</resources>

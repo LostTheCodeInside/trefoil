@@ -1,0 +1,784 @@
+{
+  "@@locale": "en",
+  "appTitle": "Trefoil",
+  "navConnect": "Connect",
+  "navServers": "Servers",
+  "navLogs": "Logs",
+  "stateConnected": "Connected",
+  "stateConnecting": "Connecting…",
+  "stateDisconnecting": "Disconnecting…",
+  "stateNotConnected": "Not connected",
+  "noServerSelected": "No server selected",
+  "noServersYet": "No servers yet — add one to connect.",
+  "actionConnect": "Connect",
+  "actionDisconnect": "Disconnect",
+  "download": "Download",
+  "upload": "Upload",
+  "noReadingYet": "No reading yet",
+  "@noReadingYet": {
+    "description": "Spoken in place of the em dash that stands for a figure the core has not reported yet."
+  },
+  "totalTraffic": "Total {value}",
+  "@totalTraffic": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "serverUnusable": "This server cannot be used: {reason}",
+  "@serverUnusable": {
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsChangedReconnect": "Settings changed — reconnect to apply them.",
+  "actionReconnect": "Reconnect",
+  "modeRule": "Rule",
+  "modeGlobal": "Global",
+  "modeDirect": "Direct",
+  "serversTitle": "Servers",
+  "serversEmptyTitle": "No servers yet",
+  "serversEmptyBody": "Add a server with a share link, or import a subscription URL.",
+  "serversNoMatches": "No server matches that search.",
+  "searchServers": "Search {count} servers",
+  "@searchServers": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "sort": "Sort",
+  "sortByName": "Name",
+  "sortByLatency": "Latency",
+  "testLatency": "Test latency",
+  "testLatencyNeedsConnection": "Connect first to measure latency",
+  "subscriptions": "Subscriptions",
+  "ruleServer": "Through server",
+  "ruleServerSelected": "Whichever is selected",
+  "serversAddedManually": "Added manually",
+  "serverCount": "{count, plural, =1{1 server} other{{count} servers}}",
+  "@serverCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "actionAdd": "Add",
+  "actionRemove": "Remove",
+  "actionRefresh": "Refresh",
+  "latencyTimeout": "timeout",
+  "runsOnXray": "Runs on the Xray core (post-quantum REALITY)",
+  "updatedAgo": "Updated {ago}",
+  "@updatedAgo": {
+    "placeholders": {
+      "ago": {
+        "type": "String"
+      }
+    }
+  },
+  "agoJustNow": "just now",
+  "agoMinutes": "{count}m ago",
+  "@agoMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "agoHours": "{count}h ago",
+  "@agoHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "agoDays": "{count}d ago",
+  "@agoDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "quotaUsedOf": "{used} of {total}",
+  "@quotaUsedOf": {
+    "placeholders": {
+      "used": {
+        "type": "String"
+      },
+      "total": {
+        "type": "String"
+      }
+    }
+  },
+  "quotaExpired": "expired",
+  "quotaExpiresIn": "expires in {days} days",
+  "@quotaExpiresIn": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    }
+  },
+  "reimportBanner": "These servers were imported before Xray support. Refresh them so post-quantum REALITY servers can use the right core.",
+  "actionDismiss": "Dismiss",
+  "actionRefreshAll": "Refresh all",
+  "tabShareLink": "Share link",
+  "tabSubscription": "Subscription",
+  "tabJson": "JSON",
+  "fieldShareLink": "Share link",
+  "fieldSubscriptionUrl": "Subscription URL",
+  "fieldNameOptional": "Name (optional)",
+  "fieldOutboundJson": "sing-box outbound JSON",
+  "outboundJsonHelp": "One outbound, not a whole config. It joins routing and latency tests like any server.",
+  "actionAddServer": "Add server",
+  "actionImport": "Import",
+  "scanQrCode": "Scan QR code",
+  "scanTitle": "Scan QR code",
+  "torch": "Torch",
+  "cameraUnavailable": "Camera unavailable: {code}. Grant camera access in system settings, or paste the link instead.",
+  "@cameraUnavailable": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "logsTitle": "Logs",
+  "logsCopy": "Copy",
+  "logsCopied": "Logs copied",
+  "logsWaiting": "Waiting for the core to say something…",
+  "logsIdle": "Logs appear here while the tunnel is running.",
+  "connectionsTitle": "Connections",
+  "connectionsCloseAll": "Close all",
+  "connectionsEmpty": "No open connections.",
+  "connectionsNeedsConnection": "Connections are only visible while connected.",
+  "settingsTitle": "Settings",
+  "sectionRouting": "Routing",
+  "sectionApps": "Apps",
+  "sectionNetwork": "Network",
+  "sectionAbout": "About",
+  "appUpdates": "App updates",
+  "appVersionInstalled": "Version {version}",
+  "@appVersionInstalled": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpToDate": "Version {version} is the latest",
+  "@appUpToDate": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateAvailable": "Version {version} is available · {size}",
+  "@appUpdateAvailable": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateDownloading": "Downloading {done} of {total}",
+  "@appUpdateDownloading": {
+    "placeholders": {
+      "done": {
+        "type": "String"
+      },
+      "total": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateNeedsPermission": "Allow Trefoil to install apps to continue",
+  "appUpdateInstalling": "Waiting for Android to confirm…",
+  "appUpdateCheck": "Check",
+  "appUpdateInstall": "Update",
+  "appUpdateAllow": "Allow",
+  "appUpdateWhatsNew": "What's new in {version}",
+  "@appUpdateWhatsNew": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateSnack": "Trefoil {version} is available",
+  "@appUpdateSnack": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateView": "View",
+  "appUpdateErrorNetwork": "Couldn't reach the update server",
+  "appUpdateErrorServer": "The update server answered HTTP {status}",
+  "@appUpdateErrorServer": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateErrorMalformed": "The update server sent something unreadable",
+  "appUpdateErrorIncomplete": "The download was incomplete or damaged. Try again.",
+  "appUpdateErrorSignature": "This update is signed with a different key, so it was not installed",
+  "appUpdateErrorRejected": "The update was refused: {detail}",
+  "@appUpdateErrorRejected": {
+    "placeholders": {
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
+  "appUpdateErrorStorage": "Couldn't save the download: {detail}",
+  "@appUpdateErrorStorage": {
+    "placeholders": {
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
+  "actionRetry": "Try again",
+  "routingBypassLan": "Bypass local network",
+  "routingBypassLanBody": "Private addresses go direct; everything else is proxied",
+  "routingGlobal": "Global",
+  "routingGlobalBody": "Send all traffic through the proxy",
+  "rulesAndFiltering": "Rules & filtering",
+  "rulesSummaryNone": "No rules active",
+  "rulesSummary": "{presets} preset(s), {rules} custom rule(s)",
+  "@rulesSummary": {
+    "placeholders": {
+      "presets": {
+        "type": "int"
+      },
+      "rules": {
+        "type": "int"
+      }
+    }
+  },
+  "perAppProxy": "Per-app proxy",
+  "perAppAll": "All apps use the tunnel",
+  "perAppIncluded": "{count} app(s) proxied",
+  "@perAppIncluded": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "perAppExcluded": "{count} app(s) bypassed",
+  "@perAppExcluded": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "connectAfterRestart": "Connect after restart",
+  "connectAfterRestartBody": "Best effort — Android may block it. For a guarantee, use the system Always-on VPN setting.",
+  "ipv6": "IPv6",
+  "ipv6Body": "Off unless your provider supports it",
+  "mtu": "MTU",
+  "dataUsage": "Data usage",
+  "dataUsageBody": "Daily totals, recorded even while the app is closed",
+  "backup": "Backup",
+  "backupBody": "Export or restore servers, rules and settings",
+  "generatedConfig": "Generated config",
+  "generatedConfigBody": "What the core actually runs, for debugging",
+  "language": "Language",
+  "languageSystem": "Follow system",
+  "singBoxCore": "sing-box core",
+  "xrayCore": "Xray core",
+  "xrayCoreBody": "{version} · used only for post-quantum REALITY",
+  "@xrayCoreBody": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "checking": "checking…",
+  "appsAll": "All",
+  "appsOnlyThese": "Only these",
+  "appsExceptThese": "Except these",
+  "appsSearch": "Search apps",
+  "appsSelected": "Selected: {count}",
+  "@appsSelected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "appsNoMatches": "No apps match that search",
+  "appsAllUseTunnel": "Every app uses the tunnel.\nPick a mode above to narrow it down.",
+  "routingTitle": "Routing",
+  "updateLists": "Update lists",
+  "updatingLists": "Updating lists…",
+  "listsUpdated": "Lists updated",
+  "addRule": "Add rule",
+  "sectionPresets": "Presets",
+  "sectionMyRules": "My rules",
+  "myRulesHint": "Your own rules are checked before the presets, so they always win.",
+  "presetUnavailable": "Could not download — not applied",
+  "matchOn": "Match on",
+  "value": "Value",
+  "actionProxy": "Proxy",
+  "actionDirect": "Direct",
+  "actionBlock": "Block",
+  "actionWarp": "WARP",
+  "matchDomainSuffix": "Domain suffix",
+  "matchDomain": "Exact domain",
+  "matchDomainKeyword": "Domain contains",
+  "matchIpCidr": "IP / CIDR",
+  "matchPackageName": "App",
+  "matchDomainRegex": "Domain matches",
+  "matchPort": "Port",
+  "matchPortRange": "Port range",
+  "matchNetwork": "Network",
+  "matchProtocol": "Protocol",
+  "hintDomainSuffix": "example.com — also matches www.example.com",
+  "hintDomain": "example.com — that host only",
+  "hintDomainKeyword": "netflix — matches any host containing it",
+  "hintIpCidr": "10.0.0.0/8 or 1.2.3.4",
+  "hintPackageName": "com.example.app",
+  "hintDomainRegex": "^ads\\..*\\.com$ — a regular expression",
+  "hintPortRange": "8000:8999 — leave one side empty for open-ended",
+  "hintPort": "443 — one port, 1 to 65535",
+  "hintNetwork": "tcp or udp",
+  "hintProtocol": "What the traffic turned out to be",
+  "editRule": "Edit rule",
+  "saveRule": "Save",
+  "protocolNeedsSniffing": "Protocol rules only match while traffic sniffing is on.",
+  "ruleInvalid": "Not applied — the value is no longer valid",
+  "sectionWarp": "Cloudflare WARP",
+  "enableWarp": "Enable WARP",
+  "warpRegistering": "Registering with Cloudflare…",
+  "warpRegistered": "Registered — available as a rule target",
+  "warpOffBody": "Registers a free account, no sign-up needed",
+  "warpThroughProxy": "Send WARP through the proxy",
+  "warpThroughProxyOn": "A second hop — use when a site blocks your proxy's exit IP",
+  "warpThroughProxyOff": "WARP dials out on its own, bypassing the proxy",
+  "warpForAll": "Send everything through WARP",
+  "warpForAllOn": "Sites see a Cloudflare address; your proxy carries it underneath",
+  "warpForAllOff": "Only what a rule sends to WARP — everything else exits at your proxy",
+  "usageTitle": "Data usage",
+  "usageThisMonth": "This month",
+  "usageLastDays": "Last {count} days",
+  "@usageLastDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "usageTapBar": "Tap a bar for that day's figures.",
+  "usageRecordedDays": "Recorded days",
+  "usageEmpty": "Nothing recorded yet. Usage is counted while the tunnel runs, including when the app is closed.",
+  "actionReload": "Reload",
+  "backupTitle": "Backup",
+  "backupTabExport": "Export",
+  "backupTabRestore": "Restore",
+  "backupExportBody": "Everything is included, credentials as well. Choose a password you can reproduce — there is no way to recover the backup without it.",
+  "backupPassword": "Password",
+  "backupPasswordHelp": "At least 8 characters",
+  "backupPasswordTooShort": "Use at least 8 characters.",
+  "backupCreate": "Create backup",
+  "backupCharacters": "{count} characters",
+  "@backupCharacters": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "backupCopy": "Copy",
+  "backupCopied": "Backup copied — paste it somewhere safe",
+  "backupRestoreBody": "Restoring replaces every server, subscription and rule currently in the app. Nothing is written unless the whole backup reads correctly.",
+  "backupText": "Backup text",
+  "backupRestore": "Restore",
+  "backupRestored": "Backup restored",
+  "configTitle": "Generated config",
+  "configCopyRedacted": "Copy without credentials",
+  "configCopied": "Copied with credentials removed",
+  "configSelectServer": "Select a server first.",
+  "settingsGeneral": "General",
+  "settingsGeneralBody": "Language, appearance, notification",
+  "settingsRoutingBody": "What goes through the tunnel and what does not",
+  "settingsDns": "DNS",
+  "settingsDnsBody": "Resolvers and lookup strategy",
+  "settingsInbound": "Inbound",
+  "settingsInboundBody": "TUN device and MTU",
+  "settingsWarpBody": "A free Cloudflare exit, chained or on its own",
+  "settingsAboutBody": "Updates and core versions",
+  "themeMode": "Theme",
+  "themeSystem": "Follow the device",
+  "themeLight": "Light",
+  "themeDark": "Dark",
+  "logLevel": "Log level",
+  "logLevelBody": "How much the core writes to the log view",
+  "batteryOptimization": "Battery optimisation",
+  "batteryOptimizationOn": "Android may sleep the app and drop the tunnel",
+  "batteryOptimizationOff": "Exempt — the tunnel survives the screen going off",
+  "remoteDns": "Remote DNS",
+  "remoteDnsBody": "Resolved through the proxy, so the resolver sees the exit node",
+  "directDns": "Direct resolver",
+  "directDnsBody": "Resolves the proxy's own hostname, before any tunnel exists",
+  "directDnsSystem": "The network's own DNS",
+  "domainStrategy": "Domain strategy",
+  "domainStrategyAuto": "Automatic",
+  "tunStack": "TUN stack",
+  "tunStackBody": "Change this only if traffic stalls on your device",
+  "mtuBody": "Lower it if large packets stall; 9000 suits most networks",
+  "actionCancel": "Cancel",
+  "actionSave": "Save",
+  "invalidValue": "That value is not usable",
+  "directDnsMustBeIp": "The direct resolver must be an IP address, not a hostname",
+  "notificationSpeed": "Speed in the notification",
+  "notificationSpeedOff": "Off",
+  "notificationSpeedTotal": "Total only",
+  "notificationSpeedSplit": "Proxy and direct",
+  "notificationSpeedSplitBody": "Keeps the core reporting every connection while the tunnel is up, app closed included",
+  "hapticFeedback": "Haptic feedback",
+  "hapticFeedbackBody": "A short tick on connect and disconnect",
+  "memoryLimit": "Memory limit",
+  "memoryLimitBody": "Trades throughput for a smaller heap. Try it if the app is being killed for memory",
+  "debugMode": "Debug mode",
+  "debugModeBody": "Core debug instrumentation. Takes effect after restarting the app",
+  "crashReports": "Crash reports",
+  "crashReportsBody": "Record uncaught errors to a file on this device. Nothing is sent anywhere",
+  "crashReportsView": "View crash log",
+  "crashReportsEmpty": "No crashes recorded",
+  "actionClear": "Clear",
+  "autoCheckIp": "Check exit address",
+  "autoCheckIpBody": "Ask what address the outside world sees after connecting. This is a request to a third party",
+  "testUrl": "Connection test URL",
+  "testUrlBody": "Must answer quickly with an empty body",
+  "testInterval": "Latency test interval",
+  "testIntervalBody": "How often the fastest server is re-measured",
+  "warpLicense": "WARP+ licence key",
+  "warpLicenseBody": "Attaches a WARP+ key to this account",
+  "warpLicenseNotSet": "Not set",
+  "warpLicenseActive": "Active",
+  "warpLicenseApplied": "Licence key accepted",
+  "warpEndpoint": "WARP endpoint",
+  "warpEndpointBody": "Cloudflare answers on many addresses; try another if this network blocks the usual one",
+  "warpEndpointAuto": "As registered",
+  "warpPort": "WARP port",
+  "strictRoute": "Strict route",
+  "strictRouteBody": "Stop other apps escaping the tunnel with their own bypass",
+  "mixedPort": "Local proxy port",
+  "mixedPortBody": "A SOCKS and HTTP proxy on this port, for apps you can point at one directly",
+  "portOff": "Off",
+  "directPort": "Direct proxy port",
+  "directPortBody": "A second local proxy whose traffic always goes out direct",
+  "shareInLocalNetwork": "Share on the local network",
+  "shareInLocalNetworkBody": "Lets other devices use the local proxies. On an untrusted network this is an open proxy",
+  "clashApiPort": "Control API port",
+  "clashApiPortBody": "Clash-compatible API for external dashboards. Any app on this device can reach it, so it is gated by the secret below",
+  "clashApiSecret": "API secret",
+  "actionCopy": "Copy",
+  "copied": "Copied",
+  "fakeDns": "Fake DNS",
+  "fakeDnsBody": "Answer instantly with a placeholder address instead of waiting for a lookup",
+  "resolveDestination": "Resolve destination",
+  "resolveDestinationBody": "Resolve a hostname before the IP rules run, so IP lists can match it",
+  "tlsTricks": "TLS tricks",
+  "tlsTricksBody": "Splitting the TLS handshake past a filter that inspects it",
+  "enableFragment": "Fragment the handshake",
+  "fragmentXrayOnly": "Applies only to servers that run on the Xray core",
+  "fragmentPackets": "Packets",
+  "fragmentLength": "Fragment size",
+  "fragmentInterval": "Fragment delay",
+  "minutesValue": "{value} minutes",
+  "@minutesValue": {
+    "placeholders": {
+      "value": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsLogsBody": "What the core is doing right now",
+  "notificationInterval": "Update interval",
+  "notificationIntervalBody": "How often the ongoing notification refreshes. The app's own readout is unaffected",
+  "secondsValue": "{value}s",
+  "metered": "Metered connection",
+  "meteredBody": "Tell Android the tunnel costs money, so background sync backs off",
+  "wakeLock": "Keep the CPU awake",
+  "wakeLockBody": "Costs battery. Only worth it if the tunnel stalls when the screen is off",
+  "trafficStats": "Record data usage",
+  "trafficStatsBody": "Daily totals. Off means nothing is written at all",
+  "sniffing": "Traffic sniffing",
+  "sniffingBody": "Read the hostname off each connection. Every domain rule needs it",
+  "httpProxyForVpn": "System HTTP proxy",
+  "httpProxyForVpnBody": "Point Android at the local proxy, so browsers skip the TUN device entirely",
+  "httpProxyNeedsPort": "Needs a local proxy port first",
+  "ruleSetSource": "Rule set source",
+  "ruleSetSourceOfficial": "Official (GitHub)",
+  "ruleSetSourceJsdelivr": "jsDelivr CDN",
+  "ruleSetSourceCustom": "Custom address",
+  "ruleSetSourceBody": "Where the routing lists come from. Change it if GitHub is blocked here",
+  "ruleSetBase": "Mirror address",
+  "ruleSetBaseBody": "Laid out like the official one: {base}/sing-geosite/rule-set/…",
+  "@secondsValue": {
+    "placeholders": {
+      "value": {
+        "type": "int"
+      }
+    }
+  },
+  "@ruleSetBaseBody": {
+    "placeholders": {
+      "base": {
+        "type": "String"
+      }
+    }
+  },
+  "serverAddressStrategy": "Server address strategy",
+  "serverAddressStrategyBody": "How the proxy's own hostname resolves, before any tunnel exists",
+  "resetOnNetworkChange": "Reset on network change",
+  "resetOnNetworkChangeBody": "Close open connections when the link changes. They do not survive a handover — they just stop carrying data",
+  "resetOnWake": "Reset on wake",
+  "resetOnWakeBody": "Close open connections when the device wakes, where they have been idle long enough for the far end to give up",
+  "groupInNotification": "Name the subscription",
+  "groupInNotificationBody": "Put the subscription a server came from in the notification title",
+  "certificateSection": "Certificate checking",
+  "allowInsecure": "Always allow insecure",
+  "allowInsecureBody": "Skip TLS verification on every server. A share link can already ask for this on its own",
+  "insecureDownloads": "Insecure downloads",
+  "insecureDownloadsBody": "Skip TLS verification when fetching subscriptions and rule sets",
+  "insecureWarning": "With these on, anything between this device and the server can present its own certificate and be believed",
+  "multiplex": "Multiplex",
+  "multiplexBody": "Carry many streams over one connection",
+  "enableMultiplex": "Enable multiplex",
+  "multiplexBenefit": "Skips a fresh handshake per connection, which is what costs time on a slow link",
+  "multiplexServerAgrees": "The server has to speak the same protocol. If it does not, connections hang rather than report why — so turn this off again if things stop loading.",
+  "multiplexProtocol": "Protocol",
+  "multiplexStreams": "Streams per connection",
+  "multiplexStreamsBody": "More reuses the connection harder; too many and one stalled stream holds up the rest",
+  "multiplexPadding": "Padding",
+  "multiplexPaddingBody": "Blurs the traffic shape. Costs bandwidth, and the server must pad too",
+  "multiplexScope": "Applies to VMess, VLESS, Trojan and Shadowsocks. Hysteria, TUIC and AnyTLS already multiplex over QUIC, and VLESS with a flow is left alone.",
+  "alwaysOn": "Always-on VPN",
+  "alwaysOnActive": "On",
+  "alwaysOnLockdown": "On, and traffic is blocked while the tunnel is down",
+  "alwaysOnInactive": "Not seen at the last connection — if that is right, traffic goes out unprotected whenever the tunnel drops",
+  "alwaysOnUnknown": "Connect once to see whether it is on",
+  "alwaysOnHowTo": "Opens Android’s VPN settings. Tap the gear beside Trefoil, then turn on Always-on VPN and Block connections without VPN.",
+  "openVpnSettings": "Could not open the VPN settings",
+  "speedChartTitle": "Live speed",
+  "speedChartPeak": "Peak {value}",
+  "@speedChartPeak": {
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
+  "tunnelStalled": "Connected, but nothing is getting through",
+  "tunnelStalledBody": "The server is not answering through the tunnel. Try another server, or reconnect.",
+  "copyLink": "Copy link",
+  "exportServers": "Export servers",
+  "exportServersBody": "Every server as a subscription list, ready to paste into this app or another client",
+  "exportServersDone": "{count} servers copied",
+  "@exportServersDone": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "exportServersSkipped": "{count} had no share link and were left out",
+  "@exportServersSkipped": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "runsOnAmnezia": "Runs on the AmneziaWG core (obfuscated handshake)",
+  "amneziaLossyObfuscation": "Obfuscation drops ~{percent} of packets · ask for H1–H4 = 1,2,3,4",
+  "@amneziaLossyObfuscation": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "speedTest": "Speed test",
+  "speedTestBody": "Measures the connection as it is now, through whichever server is carrying traffic.",
+  "speedTestOutsideTunnel": "A per-app rule leaves this app outside the tunnel, so this measures the plain connection instead.",
+  "speedTestLatency": "Latency",
+  "speedTestFailed": "Could not measure",
+  "speedTestStart": "Start",
+  "testAllServers": "Test every server",
+  "testSelectedServer": "Test the one in use",
+  "notMeasurableNow": "Runs on another core, so it is only measurable while it is the one in use",
+  "checkReachability": "Check reachability",
+  "reachabilityNeedsCore": "Carried over UDP, so it can only be measured through a running tunnel",
+  "actionUndo": "Undo",
+  "serverRemoved": "Removed {name}",
+  "@serverRemoved": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "ruleRemoved": "Rule removed",
+  "removeSubscriptionTitle": "Remove {name}?",
+  "@removeSubscriptionTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "removeSubscriptionBody": "{count, plural, =0{No servers came from it. This cannot be undone.} =1{Its 1 server goes too. This cannot be undone.} other{Its {count} servers go too. This cannot be undone.}}",
+  "@removeSubscriptionBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "localProxyAuth": "Require a login",
+  "localProxyAuthBody": "Apps must sign in with the username and password below. Off, any app on this phone can use the local proxies",
+  "proxyUsername": "Username",
+  "proxyPassword": "Password",
+  "httpProxyNeedsOpenProxy": "Android cannot pass a login on to apps. Turn off “Require a login” to use this",
+  "shareInLocalNetworkLockedBody": "Lets other devices on this network use the local proxies, with the login above",
+  "errorWithDetail": "{message}: {detail}",
+  "@errorWithDetail": {
+    "description": "A translated failure followed by the technical detail that is shown as-is (a parser or OS message).",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      },
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
+  "errorNoServer": "Add a server first",
+  "errorServerUnsupported": "{server} needs a feature neither core has: {feature}",
+  "@errorServerUnsupported": {
+    "placeholders": {
+      "server": {
+        "type": "String"
+      },
+      "feature": {
+        "type": "String"
+      }
+    }
+  },
+  "errorXrayUnconvertible": "{server} needs the Xray core, but its share link could not be converted",
+  "@errorXrayUnconvertible": {
+    "placeholders": {
+      "server": {
+        "type": "String"
+      }
+    }
+  },
+  "errorVpnPermission": "VPN permission is required to connect",
+  "errorConfigRejected": "sing-box rejected it",
+  "errorWarpNotOn": "Turn WARP on first",
+  "errorWarpRegistration": "Could not register with Cloudflare",
+  "errorSaveFailed": "Could not save changes",
+  "errorRuleSetsUnavailable": "Could not download {lists}. Routing continues without those lists.",
+  "@errorRuleSetsUnavailable": {
+    "placeholders": {
+      "lists": {
+        "type": "String"
+      }
+    }
+  },
+  "errorNotALink": "That does not look like a supported share link",
+  "errorWireGuardIncomplete": "That WireGuard config is missing a key, a peer or an address",
+  "errorSubscriptionRefused": "The provider refused this link (HTTP {status}). It may have expired or been revoked.",
+  "@errorSubscriptionRefused": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "errorSubscriptionNotFound": "The provider has nothing at this link (HTTP {status}). Check that it was copied in full.",
+  "@errorSubscriptionNotFound": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "errorSubscriptionRateLimited": "The provider is limiting requests. Try again in a few minutes.",
+  "errorSubscriptionServerError": "The provider’s server failed (HTTP {status}). Try again later.",
+  "@errorSubscriptionServerError": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "errorSubscriptionHttp": "The provider answered with HTTP {status} instead of a server list",
+  "@errorSubscriptionHttp": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "errorSubscriptionTooLarge": "That subscription is far too large to be a server list",
+  "errorSubscriptionEmpty": "No usable servers found in this subscription",
+  "errorUnreachableHost": "Could not reach {host}. Check the address and your connection",
+  "@errorUnreachableHost": {
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "errorUnreachable": "Could not reach the server. Check your connection",
+  "errorTls": "The secure connection failed: the certificate was not accepted",
+  "errorTimeout": "The request timed out",
+  "errorNetwork": "The network request failed",
+  "errorUnreadable": "That could not be read",
+  "errorWrongPassword": "Wrong password, or the backup is damaged",
+  "errorNotABackup": "That does not look like a Trefoil backup",
+  "errorBackupTooNew": "This backup was made by a newer version of Trefoil. Update the app to restore it.",
+  "errorFileTooLarge": "That file is too large to be a backup",
+  "errorFileFailed": "The file could not be read or written",
+  "errorNoFilePicker": "No app on this phone can open or save files",
+  "errorDialogOpen": "A dialog is already open. Finish that one first",
+  "errorTunnelUnavailable": "The tunnel is only available on Android",
+  "errorVpnUnavailable": "This device does not allow VPN apps. A work profile or device policy may be blocking them",
+  "errorStartFailed": "The tunnel could not start",
+  "errorCoreFailed": "The tunnel reported a problem",
+  "errorUnknown": "Something went wrong",
+  "backupPasswordRepeat": "Repeat password",
+  "backupPasswordMismatch": "The passwords do not match.",
+  "showPassword": "Show password",
+  "hidePassword": "Hide password",
+  "backupReady": "Backup ready",
+  "backupSaveFile": "Save as file",
+  "backupSaved": "Backup saved",
+  "backupOpenFile": "Open file",
+  "backupFromFile": "Backup loaded from a file",
+  "backupRemoveFile": "Remove",
+  "appsShowSystem": "Show system apps"
+}

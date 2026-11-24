@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the native side shows with no Flutter engine to ask: the notification,
+     the Quick Settings tile and the widget. Each language here matches the app's own
+     ARB translation of the same phrase, so the shade and the app never disagree. -->
+<resources>
+    <string name="widget_description">Connect or disconnect the tunnel</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_disconnecting">Disconnecting…</string>
+    <string name="status_not_connected">Not connected</string>
+    <string name="widget_tap_to_connect">Tap to connect</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="error_vpn_revoked">VPN permission was revoked</string>
+    <string name="error_core_gave_up">The core stopped responding and could not be restarted. Try connecting again.</string>
+    <string name="channel_tunnel_status">Tunnel status</string>
+    <string name="channel_core_messages">Core messages</string>
+</resources>

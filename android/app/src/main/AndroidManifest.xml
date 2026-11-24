@@ -1,0 +1,161 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ requires the specific FGS type to be requested as a permission too. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Android 13+: the ongoing "connected" notification is user-dismissable otherwise. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Scanning share-link and subscription QR codes. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- libbox PlatformInterface.ReadWIFIState() reads SSID/BSSID for WIFI-based routing rules. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Restart the tunnel after reboot when the user enabled auto-connect. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- The in-app updater hands its download to the system installer, which then asks
+         the user to confirm. A build ever published on Play must drop this: Play allows
+         updates only through Play itself. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Android puts a background app to sleep, which for an always-on VPN shows up as
+         the tunnel dropping while the screen is off. Play treats a VPN as an approved
+         use case for asking to be exempted. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
+    <!-- Per-app proxy needs the full installed-app list. Play Store requires a declaration
+         form for this; "VPN/parental control" is an approved use case. Without it the
+         per-app allow/disallow screen can only show apps that match <queries> filters. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- Backup is off, and deliberately so. profiles.json holds every server's
+         credentials in plain text (WireGuard private keys, VLESS/VMess UUIDs, Trojan
+         and Shadowsocks passwords), and Android's default is to back an app up unless
+         it says otherwise. Left at that default, Auto Backup copies the file to the
+         user's Google Drive and `adb backup` pulls it off over USB.
+
+         All three attributes are needed to close it: allowBackup for Android 11 and
+         below, fullBackupContent to say the same thing in the form those versions
+         read, and dataExtractionRules because on 12 and above allowBackup="false"
+         stops the cloud copy but not a device-to-device transfer.
+
+         The cost is that a user reinstalling loses their servers. That is what the
+         app's own encrypted backup is for: it asks for a passphrase, so the copy that
+         leaves the device is one the user chose to make. -->
+    <application
+        android:label="Trefoil"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/backup_rules">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The tunnel itself. BIND_VPN_SERVICE makes this bindable only by the system,
+             which is what gates the VPN consent dialog. -->
+        <service
+            android:name=".core.TrefoilVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="vpn" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- Connect/disconnect from the notification shade. -->
+        <service
+            android:name=".core.TrefoilTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tunnel"
+            android:label="Trefoil"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Best-effort reconnect after a reboot; see AutoStart for why it cannot be
+             a guarantee on Android 12+. -->
+        <!-- Install results for the in-app updater. Not exported: only the system,
+             holding this app's pending intent, can deliver to it. -->
+        <receiver
+            android:name=".core.UpdateStatusReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".core.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Home screen widget. Exported because the system delivers its updates;
+             which is exactly why the tap does not land here (see below). -->
+        <receiver
+            android:name=".core.TrefoilWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_tunnel_info" />
+        </receiver>
+
+        <!-- The widget's tap. Not exported: reachable only through the PendingIntent
+             the widget holds, which runs as this app. On the exported provider any
+             installed app could send it and switch the tunnel off unseen. -->
+        <receiver
+            android:name=".core.WidgetToggleReceiver"
+            android:exported="false" />
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <!-- Fallback for per-app proxy when QUERY_ALL_PACKAGES is unavailable. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+</manifest>
