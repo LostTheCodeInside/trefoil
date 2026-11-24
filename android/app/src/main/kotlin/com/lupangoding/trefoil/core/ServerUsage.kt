@@ -50,8 +50,10 @@ object ServerUsage {
     @Synchronized
     fun setActive(context: Context, tag: String) {
         if (tag == active) return
-        // Flush first: what has accumulated belongs to the server that carried it.
-        flush(context)
+        // Flush first: what has accumulated belongs to the server that carried it. With
+        // none before it that is this one, which the core names a moment after it
+        // starts counting.
+        if (active.isNotEmpty()) flush(context)
         active = tag
     }
 
@@ -77,6 +79,8 @@ object ServerUsage {
         flush(context)
         lastUplinkTotal = 0
         lastDownlinkTotal = 0
+        // The next session may be another server's, and it is the core that says whose.
+        active = ""
     }
 
     @Synchronized
@@ -97,16 +101,12 @@ object ServerUsage {
         server.put("up", server.optLong("up") + pendingUp)
         server.put("down", server.optLong("down") + pendingDown)
         root.put(active, server)
-        pendingUp = 0
-        pendingDown = 0
 
         prune(root)
-        // Temp-then-rename: a crash mid-write would otherwise leave unparseable JSON
-        // and silently lose every total.
-        runCatching {
-            val temp = File(file.parentFile, "${file.name}.tmp")
-            temp.writeText(root.toString())
-            if (!temp.renameTo(file)) temp.delete()
+        // Kept until it is on disk: a write that failed is tried again with the next.
+        runCatching { AtomicFiles.write(file, root.toString()) }.onSuccess {
+            pendingUp = 0
+            pendingDown = 0
         }
     }
 
@@ -118,11 +118,7 @@ object ServerUsage {
         val root = runCatching { JSONObject(file.readText()) }.getOrElse { return }
         if (!root.has(tag)) return
         root.remove(tag)
-        runCatching {
-            val temp = File(file.parentFile, "${file.name}.tmp")
-            temp.writeText(root.toString())
-            if (!temp.renameTo(file)) temp.delete()
-        }
+        runCatching { AtomicFiles.write(file, root.toString()) }
     }
 
     private fun prune(root: JSONObject) {

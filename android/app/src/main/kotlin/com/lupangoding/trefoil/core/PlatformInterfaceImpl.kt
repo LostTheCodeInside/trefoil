@@ -9,6 +9,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.ProxyInfo
+import android.net.VpnService
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -29,6 +31,7 @@ import io.nekohasekai.libbox.ShellSession
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.InterfaceAddress
 import java.util.concurrent.ConcurrentHashMap
@@ -55,7 +58,16 @@ class PlatformInterfaceImpl(private val service: TrefoilVpnService) : PlatformIn
     }
 
     /** Held so the fd stays open for the tunnel's lifetime; Go works on a dup of it. */
+    @Volatile
     private var tunDescriptor: ParcelFileDescriptor? = null
+
+    /** The previous tunnel's, still holding the phone's traffic while the next starts. */
+    @Volatile
+    private var heldDescriptor: ParcelFileDescriptor? = null
+
+    /** What the device now open was opened with; see [openTun]. */
+    @Volatile
+    private var openPlan: TunPlan? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var updateListener: InterfaceUpdateListener? = null
     private val probe by lazy { NetworkProbe(connectivity) }
@@ -87,48 +99,103 @@ class PlatformInterfaceImpl(private val service: TrefoilVpnService) : PlatformIn
 
     // ---- TUN -------------------------------------------------------------
 
+    /**
+     * Opens the device, or carries on with the one being replaced when nothing about it
+     * would be different.
+     *
+     * Which is most reconnects, and the only way to make one without a gap: Android
+     * takes the old device down before it has moved the phone's routes to a new one, and
+     * for that moment every app is on the bare network.
+     */
     override fun openTun(options: TunOptions): Int {
-        val builder = service.Builder().setSession(TUN_SESSION).setMtu(options.getMTU())
+        val plan = planFor(options)
+        // A reload opens a second device without anyone having closed the first.
+        holdTun()
+        val held = heldDescriptor
+        if (held != null && plan == openPlan && isUp(plan)) {
+            heldDescriptor = null
+            tunDescriptor = held
+            return held.fd
+        }
+        val pfd = builderFor(plan).establish()
+            ?: error("VPN permission was revoked, or another VPN took over")
+        tunDescriptor = pfd
+        openPlan = plan
+        releaseHeldTun()
+        return pfd.fd
+    }
 
+    /** Everything a device is opened with, so that two can be told apart. */
+    private data class TunPlan(
+        val mtu: Int,
+        val addresses: List<Pair<String, Int>>,
+        val routes: List<Pair<String, Int>>,
+        val dns: List<String>,
+        /** With the uid each had, which a reinstall changes while the name stays. */
+        val include: List<Pair<String, Int>>,
+        val exclude: List<Pair<String, Int>>,
+        val httpProxy: Triple<String, Int, List<String>>?,
+        val metered: Boolean,
+        val bypassable: Boolean,
+    )
+
+    private fun planFor(options: TunOptions): TunPlan {
         // Each getter hands back a fresh single-pass cursor, so bind once and reuse.
-        val inet4 = options.inet4Address.toList()
-        val inet6 = options.inet6Address.toList()
-        inet4.forEach { builder.addAddress(it.address(), it.prefix()) }
-        inet6.forEach { builder.addAddress(it.address(), it.prefix()) }
-
+        val inet4 = options.inet4Address.toList().map { it.address() to it.prefix() }
+        val inet6 = options.inet6Address.toList().map { it.address() to it.prefix() }
+        val routes = mutableListOf<Pair<String, Int>>()
+        val dns = mutableListOf<String>()
         if (options.autoRoute) {
             // RouteRange is sing-box's already-computed final route set: it folds in
             // the configured route addresses minus the excluded ones. Re-deriving it
             // from the raw route/exclude lists here would risk disagreeing with the core.
-            val v4 = options.inet4RouteRange.toList()
-            val v6 = options.inet6RouteRange.toList()
-            v4.forEach { builder.addRoute(it.address(), it.prefix()) }
-            v6.forEach { builder.addRoute(it.address(), it.prefix()) }
-            if (v4.isEmpty() && inet4.isNotEmpty()) builder.addRoute("0.0.0.0", 0)
-            if (v6.isEmpty() && inet6.isNotEmpty()) builder.addRoute("::", 0)
+            val v4 = options.inet4RouteRange.toList().map { it.address() to it.prefix() }
+            val v6 = options.inet6RouteRange.toList().map { it.address() to it.prefix() }
+            routes += v4
+            routes += v6
+            if (v4.isEmpty() && inet4.isNotEmpty()) routes += "0.0.0.0" to 0
+            if (v6.isEmpty() && inet6.isNotEmpty()) routes += "::" to 0
             // A list from sing-box 1.14 on, where it was a single address.
             runCatching {
                 val servers = options.getDNSServerAddress()
-                while (servers.hasNext()) builder.addDnsServer(servers.next())
+                while (servers.hasNext()) dns += servers.next()
             }
         }
-
-        applyPerAppRules(builder, options)
-
-        if (options.isHTTPProxyEnabled() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setHttpProxy(
-                android.net.ProxyInfo.buildDirectProxy(
+        return TunPlan(
+            mtu = options.getMTU(),
+            addresses = inet4 + inet6,
+            routes = routes,
+            dns = dns,
+            include = options.includePackage.toList().map { it to uidOf(it) },
+            exclude = options.excludePackage.toList().map { it to uidOf(it) },
+            httpProxy = if (options.isHTTPProxyEnabled()) {
+                Triple(
                     options.getHTTPProxyServer(),
                     options.getHTTPProxyServerPort(),
                     options.getHTTPProxyBypassDomain().toList(),
-                ),
-            )
-        }
+                )
+            } else {
+                null
+            },
+            metered = AppPrefs.metered(service),
+            bypassable = !options.strictRoute,
+        )
+    }
 
-        // Android otherwise assumes a VPN is unmetered, so background sync treats it
-        // as free WIFI even when it is riding on mobile data.
+    private fun builderFor(plan: TunPlan): VpnService.Builder {
+        val builder = service.Builder().setSession(TUN_SESSION).setMtu(plan.mtu)
+        plan.addresses.forEach { (address, prefix) -> builder.addAddress(address, prefix) }
+        plan.routes.forEach { (address, prefix) -> builder.addRoute(address, prefix) }
+        plan.dns.forEach { builder.addDnsServer(it) }
+        applyPerAppRules(builder, plan)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setMetered(AppPrefs.metered(service))
+            plan.httpProxy?.let { (server, port, bypass) ->
+                builder.setHttpProxy(ProxyInfo.buildDirectProxy(server, port, bypass))
+            }
+            // Android otherwise assumes a VPN is unmetered, so background sync treats it
+            // as free WIFI even when it is riding on mobile data.
+            builder.setMetered(plan.metered)
         }
 
         // Lets other apps escape the tunnel with their own bypass. Withholding it is
@@ -136,37 +203,67 @@ class PlatformInterfaceImpl(private val service: TrefoilVpnService) : PlatformIn
         // the platform rather than acting on it, because we are the ones who open
         // the TUN. Our own outbound sockets are unaffected: they escape through
         // protect(), which the dialer controller calls regardless.
-        if (!options.strictRoute) builder.allowBypass()
-
-        val pfd = builder.establish()
-            ?: error("VPN permission was revoked, or another VPN took over")
-        tunDescriptor = pfd
-        return pfd.fd
+        if (plan.bypassable) builder.allowBypass()
+        return builder
     }
+
+    /** Whether the device opened on [plan] is still there and up, as the system sees it. */
+    private fun isUp(plan: TunPlan): Boolean = runCatching {
+        val address = InetAddress.getByName(plan.addresses.first().first)
+        JavaNetworkInterface.getByInetAddress(address)?.isUp == true
+    }.getOrDefault(false)
+
+    private fun uidOf(packageName: String): Int = runCatching {
+        context.packageManager.getPackageUid(packageName, 0)
+    }.getOrDefault(-1)
 
     /**
      * Per-app proxy. A package in the list that has since been uninstalled makes the
      * builder throw, which would take the whole tunnel down over a stale setting — so
      * each entry is applied independently and bad ones are dropped.
      */
-    private fun applyPerAppRules(builder: android.net.VpnService.Builder, options: TunOptions) {
-        val include = options.includePackage.toList()
-        val exclude = options.excludePackage.toList()
+    private fun applyPerAppRules(builder: VpnService.Builder, plan: TunPlan) {
         var appliedInclude = 0
-        include.forEach { pkg ->
+        plan.include.forEach { (pkg, _) ->
             runCatching { builder.addAllowedApplication(pkg) }.onSuccess { appliedInclude++ }
         }
         // An include list that ended up empty would tunnel *everything*, silently
         // inverting the user's intent, so fall back to keeping ourselves in only.
-        if (include.isNotEmpty() && appliedInclude == 0) {
+        if (plan.include.isNotEmpty() && appliedInclude == 0) {
             runCatching { builder.addAllowedApplication(context.packageName) }
         }
-        exclude.forEach { pkg -> runCatching { builder.addDisallowedApplication(pkg) } }
+        plan.exclude.forEach { (pkg, _) -> runCatching { builder.addDisallowedApplication(pkg) } }
+    }
+
+    /**
+     * Leaves the device open with nothing behind it, for a tunnel about to be replaced.
+     *
+     * Traffic sent meanwhile waits or is lost. Closing it instead handed every app on
+     * the phone back to the bare network for the seconds in between.
+     */
+    fun holdTun() {
+        val held = tunDescriptor ?: return
+        releaseHeldTun()
+        heldDescriptor = held
+        tunDescriptor = null
+    }
+
+    /** For after a start that opened no device of its own, when none is left to wait for. */
+    fun releaseHeldTun() {
+        runCatching { heldDescriptor?.close() }
+        heldDescriptor = null
     }
 
     fun closeTun() {
+        releaseHeldTun()
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
+        openPlan = null
+    }
+
+    /** Has the next start open a device of its own, whatever state this one is in. */
+    fun renewTun() {
+        openPlan = null
     }
 
     // ---- socket protection -----------------------------------------------

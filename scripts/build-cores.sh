@@ -27,7 +27,7 @@ GOMOBILE_VERSION="${GOMOBILE_VERSION:-v0.1.12}"
 # The Go toolchain is an input like any other, so it is pinned too. Whatever Go is
 # installed fetches this one on first use. Without it the artifact depends on the
 # host, and a new runtime is not something a tunnel core should pick up unannounced.
-# Xray-core v26.9 requires Go 1.27.
+# Xray-core requires Go 1.27 since v26.9.
 export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.1}"
 
 # Set to 1 to skip the upstream version check -- offline builds, or a CI runner that
@@ -241,6 +241,7 @@ log "Building libcores.aar for [$ABIS] (several minutes)"
   github.com/sagernet/sing-box/experimental/libbox \
   github.com/LostTheCodeInside/trefoil/cores/libxray \
   github.com/LostTheCodeInside/trefoil/cores/libamnezia \
-  github.com/LostTheCodeInside/trefoil/cores/libruntime
+  github.com/LostTheCodeInside/trefoil/cores/libruntime \
+  github.com/LostTheCodeInside/trefoil/cores/libkdf
 
 log "Done: $OUT_DIR/libcores.aar ($(du -h "$OUT_DIR/libcores.aar" | cut -f1))"

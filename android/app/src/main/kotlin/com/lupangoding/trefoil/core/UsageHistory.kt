@@ -73,16 +73,12 @@ object UsageHistory {
         day.put("up", day.optLong("up") + pendingUp)
         day.put("down", day.optLong("down") + pendingDown)
         root.put(today, day)
-        pendingUp = 0
-        pendingDown = 0
 
         prune(root)
-        // Temp-then-rename: a crash mid-write would otherwise leave unparseable JSON
-        // and silently lose the whole history.
-        runCatching {
-            val temp = File(file.parentFile, "${file.name}.tmp")
-            temp.writeText(root.toString())
-            if (!temp.renameTo(file)) temp.delete()
+        // Kept until it is on disk: a write that failed is tried again with the next.
+        runCatching { AtomicFiles.write(file, root.toString()) }.onSuccess {
+            pendingUp = 0
+            pendingDown = 0
         }
     }
 

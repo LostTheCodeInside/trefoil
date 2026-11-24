@@ -6,10 +6,10 @@ import java.security.SecureRandom
 /**
  * Shared secret for libbox's command server.
  *
- * The command server listens on loopback, which on Android is reachable by any other
- * app on the device. The secret is what stops a third-party app from attaching to our
- * core and reading traffic logs or issuing control commands, so it is generated with a
- * CSPRNG, persisted with private-mode permissions, and never leaves the device.
+ * The command server listens on a socket only this app can open, and asks for this on
+ * top of it: attaching to our core means reading the traffic log and issuing commands,
+ * so it should take more than one thing going wrong. Generated with a CSPRNG, persisted
+ * with private-mode permissions, and never leaves the device.
  */
 object CommandSecret {
     private const val PREFS = "trefoil_core"

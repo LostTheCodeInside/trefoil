@@ -3,6 +3,7 @@ package com.lupangoding.trefoil.core
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 enum class TunnelStage { STOPPED, STARTING, STARTED, STOPPING }
 
@@ -45,26 +46,36 @@ object ServiceState {
 
     val current: TunnelState get() = _state.value
 
-    fun update(
-        stage: TunnelStage = current.stage,
-        profileName: String = current.profileName,
-        error: String? = current.error,
-    ) {
-        val previous = _state.value
-        // Stamped here rather than by the caller, so every route that brings the
-        // tunnel up -- the app, always-on, the quick-settings tile, a reconnect --
-        // gets a start time without having to remember to pass one. Carried across
-        // STARTED -> STARTED so an update that only changes the profile name does
-        // not silently restart the clock.
-        val startedAt = when {
-            stage != TunnelStage.STARTED -> 0L
-            previous.stage == TunnelStage.STARTED && previous.startedAt > 0L -> previous.startedAt
-            else -> System.currentTimeMillis()
+    /**
+     * Changes what is given and keeps the rest.
+     *
+     * In one step, because this is called from the main thread, from the service's own
+     * and from the core's. Read and then written, two of them could cross, and the core
+     * reporting which server is in use put back the stage a disconnect had just changed.
+     */
+    fun update(stage: TunnelStage? = null, profileName: String? = null, clearError: Boolean = false) {
+        _state.update { previous ->
+            val next = stage ?: previous.stage
+            // Stamped here rather than by the caller, so every route that brings the
+            // tunnel up -- the app, always-on, the quick-settings tile, a reconnect --
+            // gets a start time without having to remember to pass one. Carried across
+            // STARTED -> STARTED so an update that only changes the profile name does
+            // not silently restart the clock.
+            val startedAt = when {
+                next != TunnelStage.STARTED -> 0L
+                previous.stage == TunnelStage.STARTED && previous.startedAt > 0L -> previous.startedAt
+                else -> System.currentTimeMillis()
+            }
+            TunnelState(
+                next,
+                profileName ?: previous.profileName,
+                if (clearError) null else previous.error,
+                startedAt,
+            )
         }
-        _state.value = TunnelState(stage, profileName, error, startedAt)
     }
 
     fun fail(message: String) {
-        _state.value = TunnelState(TunnelStage.STOPPED, current.profileName, message)
+        _state.update { TunnelState(TunnelStage.STOPPED, it.profileName, message) }
     }
 }

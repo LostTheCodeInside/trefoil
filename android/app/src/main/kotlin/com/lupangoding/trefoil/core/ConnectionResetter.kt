@@ -13,6 +13,11 @@ import io.nekohasekai.libbox.OutboundGroupItemIterator
 import io.nekohasekai.libbox.OutboundGroupIterator
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.libbox.StringIterator
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Closes the core's open connections on the events that leave them stranded.
@@ -50,6 +55,9 @@ class ConnectionResetter(private val context: Context) : CommandClientHandler {
     fun stop() {
         receiver?.let { runCatching { context.unregisterReceiver(it) } }
         receiver = null
+        // Whatever is still waiting on a core that is going away.
+        val waiting = open.getAndSet(null) ?: return
+        scope.launch { runCatching { waiting.disconnect() } }
     }
 
     /** Called by the network monitor when the underlying link changes. */
@@ -57,17 +65,30 @@ class ConnectionResetter(private val context: Context) : CommandClientHandler {
         if (AppPrefs.resetOnNetworkChange(context)) reset()
     }
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** The client of the reset under way, if there is one. */
+    private val open = AtomicReference<CommandClient?>(null)
+
+    /**
+     * Off whichever thread noticed: one is the main thread and the other the system's
+     * connectivity callbacks, and connecting to the core waits for it.
+     *
+     * One at a time. A handover changes the link several times in a second, and the
+     * first reset already closes everything the others would.
+     */
     private fun reset() {
+        val client = CommandClient(this, CommandClientOptions())
+        if (!open.compareAndSet(null, client)) return
         // Best effort throughout: a failure here costs the user a slower recovery,
         // never a broken tunnel, so nothing is worth propagating.
-        runCatching {
-            val client = CommandClient(this, CommandClientOptions())
-            try {
+        scope.launch {
+            runCatching {
                 client.connect()
                 client.closeConnections()
-            } finally {
-                runCatching { client.disconnect() }
             }
+            runCatching { client.disconnect() }
+            open.compareAndSet(client, null)
         }
     }
 

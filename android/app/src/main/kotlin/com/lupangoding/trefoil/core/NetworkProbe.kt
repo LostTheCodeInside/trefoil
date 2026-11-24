@@ -42,6 +42,12 @@ internal class NetworkProbe(private val connectivity: ConnectivityManager) {
         return fallback
     }
 
+    /** Whether what this app would use by default is a tunnel, ours included. */
+    fun activeIsVpn(): Boolean {
+        val active = runCatching { connectivity.activeNetwork }.getOrNull() ?: return false
+        return capabilitiesOf(active)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
+
     fun capabilitiesOf(network: Network): NetworkCapabilities? =
         runCatching { connectivity.getNetworkCapabilities(network) }.getOrNull()
 

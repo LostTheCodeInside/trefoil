@@ -16,8 +16,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * through here so neither has to know whether the other got there first.
  */
 object LibboxRuntime {
-    const val COMMAND_PORT = 47890
-
     private val ready = AtomicBoolean(false)
 
     fun ensureSetup(context: Context) {
@@ -32,7 +30,10 @@ object LibboxRuntime {
                     tempPath = app.cacheDir.also { it.mkdirs() }.absolutePath
                     // Works around a Go runtime stack probe that misfires on Android.
                     fixAndroidStack = true
-                    commandServerListenPort = COMMAND_PORT
+                    // Zero is a socket file in basePath rather than a port. A port on
+                    // loopback is open to every app on the device; this is open to
+                    // ours, and the kernel is what says so.
+                    commandServerListenPort = 0
                     commandServerSecret = CommandSecret.get(app)
                     // Bounded so a chatty core cannot grow the log buffer without limit.
                     logMaxLines = 300L
@@ -70,7 +71,7 @@ object LibboxRuntime {
      * Config is written temp-then-rename so a crash mid-write can never leave a
      * truncated file that would fail to parse on the next start.
      */
-    fun writeConfig(context: Context, content: String) = writeAtomically(configFile(context), content)
+    fun writeConfig(context: Context, content: String) = AtomicFiles.write(configFile(context), content)
 
     /** Passing null removes the file, so a previous Xray profile cannot linger. */
     fun writeXrayConfig(context: Context, content: String?) = writeOrRemove(xrayConfigFile(context), content)
@@ -106,15 +107,6 @@ object LibboxRuntime {
             target.delete()
             return
         }
-        writeAtomically(target, content)
-    }
-
-    private fun writeAtomically(target: File, content: String) {
-        val temp = File(target.parentFile, "${target.name}.tmp")
-        temp.writeText(content)
-        if (!temp.renameTo(target)) {
-            temp.delete()
-            error("Failed to persist configuration")
-        }
+        AtomicFiles.write(target, content)
     }
 }

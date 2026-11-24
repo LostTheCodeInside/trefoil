@@ -1,6 +1,7 @@
 package com.lupangoding.trefoil.bridge
 
 import android.content.Context
+import com.lupangoding.trefoil.core.CoreCalls
 import io.nekohasekai.libbox.CommandClient
 import io.nekohasekai.libbox.CommandClientHandler
 import io.nekohasekai.libbox.CommandClientOptions
@@ -12,7 +13,6 @@ import io.nekohasekai.libbox.OutboundGroupItemIterator
 import io.nekohasekai.libbox.OutboundGroupIterator
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.libbox.StringIterator
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Bytes seen since the previous reading, split by how routing sent them out.
@@ -48,14 +48,15 @@ class ConnectionsClient(
     private val onSnapshot: ((List<Map<String, Any?>>) -> Unit)? = null,
 ) : CommandClientHandler {
 
+    @Volatile
     private var client: CommandClient? = null
-    private val running = AtomicBoolean(false)
+    private val lane = CoreCalls.Lane()
 
     /**
      * Insertion-ordered so the list does not reshuffle on every update.
      *
-     * Touched from two threads -- the core's callback thread fills it, the main
-     * thread clears it on start and stop -- so every access holds [lock]. Without
+     * Touched from two threads -- the core's callback thread fills it, the lane
+     * clears it on start and stop -- so every access holds [lock]. Without
      * that, stopping the screen while the core was mid-update threw
      * ConcurrentModificationException out of a Go callback.
      */
@@ -71,8 +72,13 @@ class ConnectionsClient(
      */
     private var pending = TrafficDelta()
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
+    /** Both return at once; see [CoreClient.start]. */
+    fun start() = lane.post { open() }
+
+    fun stop() = lane.post { close() }
+
+    private fun open() {
+        if (client != null) return
         synchronized(lock) {
             connections.clear()
             pending = TrafficDelta()
@@ -83,24 +89,22 @@ class ConnectionsClient(
         }
         val c = CommandClient(this, options)
         client = c
-        runCatching { c.connect() }.onFailure { running.set(false) }
+        runCatching { c.connect() }.onFailure { close() }
     }
 
-    fun stop() {
-        if (!running.compareAndSet(true, false)) return
-        runCatching { client?.disconnect() }
+    private fun close() {
+        val c = client ?: return
         client = null
+        runCatching { c.disconnect() }
         synchronized(lock) { connections.clear() }
     }
 
-    /** Closes every open connection; the core reopens whatever is still needed. */
-    fun closeAll() {
-        runCatching { client?.closeConnections() }
-    }
+    private fun connectedClient(): CommandClient = client ?: error("The tunnel is not running")
 
-    fun close(id: String) {
-        runCatching { client?.closeConnection(id) }
-    }
+    /** Closes every open connection; the core reopens whatever is still needed. */
+    suspend fun closeAll() = CoreCalls.call { connectedClient().closeConnections() }
+
+    suspend fun close(id: String) = CoreCalls.call { connectedClient().closeConnection(id) }
 
     /** The packages the core resolved for a connection, or nothing when it did not. */
     private fun packageNames(connection: Connection): List<String> =

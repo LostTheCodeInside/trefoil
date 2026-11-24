@@ -1,12 +1,12 @@
 package com.lupangoding.trefoil.core
 
 import android.content.Context
-import android.net.ConnectivityManager
+import com.lupangoding.trefoil.core.UnderlyingResolver.Companion.literalAddress
 import io.nekohasekai.libbox.ExchangeContext
+import io.nekohasekai.libbox.Func
 import io.nekohasekai.libbox.LocalDNSTransport
 import java.net.Inet4Address
 import java.net.Inet6Address
-import java.net.InetAddress
 import java.net.UnknownHostException
 
 /**
@@ -24,9 +24,7 @@ import java.net.UnknownHostException
  */
 class LocalDnsTransport(private val context: Context) : LocalDNSTransport {
 
-    private val probe by lazy {
-        NetworkProbe(context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
-    }
+    private val resolver by lazy { UnderlyingResolver(context) }
 
     /**
      * False, so sing-box asks for a plain hostname lookup instead of handing us a
@@ -48,7 +46,11 @@ class LocalDnsTransport(private val context: Context) : LocalDNSTransport {
             return
         }
         try {
-            val resolved = resolve(host)
+            val resolved = resolver.resolve(host) { lookup ->
+                // The core gives up on a query well before Android does. Told so, the
+                // lookup lets go of this thread instead of holding it to the end.
+                ctx.onCancel(Func { lookup.cancel(true) })
+            }
             val matching = resolved.filter {
                 when (network) {
                     "ip4" -> it is Inet4Address
@@ -66,26 +68,9 @@ class LocalDnsTransport(private val context: Context) : LocalDNSTransport {
         }
     }
 
-    private fun resolve(host: String): List<InetAddress> {
-        val underlying = probe.bestNonVpnNetwork()
-        return if (underlying != null) {
-            underlying.getAllByName(host).toList()
-        } else {
-            // No usable non-VPN network. Falling back to the global resolver is still
-            // worth trying: before the tunnel is established it behaves normally.
-            InetAddress.getAllByName(host).toList()
-        }
-    }
-
     private companion object {
         /** DNS RCODEs, as sing-box maps ExchangeContext.errorCode straight to one. */
         const val RCODE_SERVER_FAILURE = 2
         const val RCODE_NAME_ERROR = 3
-
-        /**
-         * sing-box parses these back into addresses, and a link-local IPv6 scope
-         * suffix ("%wlan0") is not something it accepts.
-         */
-        fun InetAddress.literalAddress(): String? = hostAddress?.substringBefore('%')
     }
 }

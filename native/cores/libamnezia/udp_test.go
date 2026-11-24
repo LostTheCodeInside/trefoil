@@ -29,7 +29,7 @@ func TestUDPThroughTheTunnel(t *testing.T) {
 	}
 
 	const port = 18096
-	if err := Start(string(conf), port, testUser, testPass, noProtection{}, testLogger{t}); err != nil {
+	if err := Start(string(conf), port, testUser, testPass, noProtection{}, nil, testLogger{t}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer Stop()

@@ -11,6 +11,7 @@
     <string name="widget_tap_to_connect">Tap to connect</string>
     <string name="action_disconnect">Disconnect</string>
     <string name="error_vpn_revoked">VPN permission was revoked</string>
+    <string name="error_start_failed">Could not start the tunnel: %s</string>
     <string name="error_core_gave_up">The core stopped responding and could not be restarted. Try connecting again.</string>
     <string name="channel_tunnel_status">Tunnel status</string>
     <string name="channel_core_messages">Core messages</string>

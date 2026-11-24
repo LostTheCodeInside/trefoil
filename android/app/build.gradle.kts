@@ -105,13 +105,13 @@ android {
     }
 
     // Robolectric supplies the real android.util.Base64 and a working filesystem, so
-    // the two pieces of native state worth testing -- backup encryption and the
-    // per-server totals -- can be tested off a device. The alternative was reshaping
+    // the native state worth testing -- backup encryption, the per-server totals, what
+    // is on disk after a crash -- can be tested off a device. The alternative was reshaping
     // security-critical production code to suit a test, which is the worse trade.
     //
     // Note that any Gradle task here needs libs/libcores.aar, which is not in the
-    // repo: verifyCoreAbis() fails the build without it. That is why these run in the
-    // optional `native` CI stage, after the cores are built, rather than on every push.
+    // repo: verifyCoreAbis() fails the build without it. That is why these run in their
+    // own CI workflow, after the cores are built, rather than on every push.
     testOptions {
         // Android resources are deliberately not merged into the unit-test classpath.
         // Nothing under test reads one, and turning it on makes AGP package the
@@ -140,7 +140,7 @@ kotlin {
 }
 
 dependencies {
-    // Built from source by scripts/build-libbox.sh — not available on any Maven repo.
+    // Built from source by scripts/build-cores.sh — not available on any Maven repo.
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")

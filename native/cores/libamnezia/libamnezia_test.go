@@ -124,6 +124,9 @@ func TestParseConfRejectsWhatItCannotRun(t *testing.T) {
 		"no private key": "[Peer]\nPublicKey = RTYyQltRQ4h+CtqjPG1hwTPQA3YXwHfgDTSHCTDzvgs=\nEndpoint = a:1",
 		"no address":     strings.Replace(sample, "Address = 10.8.1.2/32, fd00::2/128", "", 1),
 		"no endpoint":    strings.Replace(sample, "Endpoint = 192.0.2.1:51820", "", 1),
+		"no port":        strings.Replace(sample, "192.0.2.1:51820", "vpn.example.com", 1),
+		"port 0":         strings.Replace(sample, "192.0.2.1:51820", "vpn.example.com:0", 1),
+		"port too large": strings.Replace(sample, "192.0.2.1:51820", "vpn.example.com:70000", 1),
 		"key of the wrong length": strings.Replace(
 			sample, "PrivateKey = 6CUypcZQO4I013IjYyZQzYBa+gB4pYG0s3rGCtaRhkY=", "PrivateKey = aGk=", 1),
 	} {
@@ -138,6 +141,7 @@ func TestParseConfRejectsWhatItCannotRun(t *testing.T) {
 type testLogger struct{ t *testing.T }
 
 func (l testLogger) Log(message string) { fmt.Fprintln(os.Stderr, "awg:", message) }
+func (l testLogger) Verbose() bool      { return true }
 
 type noProtection struct{}
 
@@ -158,7 +162,7 @@ func TestLive(t *testing.T) {
 	}
 
 	const port = 18099
-	if err := Start(string(conf), port, testUser, testPass, noProtection{}, testLogger{t}); err != nil {
+	if err := Start(string(conf), port, testUser, testPass, noProtection{}, nil, testLogger{t}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer Stop()

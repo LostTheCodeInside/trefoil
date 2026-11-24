@@ -39,11 +39,14 @@ import io.nekohasekai.libxray.Libxray
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.StatusMessage
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -108,6 +111,15 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
 
     /** An open waiting on the system file picker. */
     private var pendingOpen: MethodChannel.Result? = null
+
+    /**
+     * Which start was asked for last. A stop takes a number too, so a start still
+     * checking its config finds out that it is no longer wanted. Main thread only.
+     */
+    private var startTicket = 0
+
+    /** One start writes its files at a time: they only mean something together. */
+    private val startLock = Mutex()
 
     /** Latest telemetry, merged into every status event so the UI gets one object. */
     @Volatile
@@ -218,8 +230,21 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
         // it stops arriving the moment the tunnel drops, which is exactly when the UI
         // most needs to hear about it.
         scope.launch {
+            var session = 0L
             ServiceState.state.collect { state ->
-                if (state.stage == TunnelStage.STARTED) coreClient.start() else coreClient.stop()
+                if (state.stage == TunnelStage.STARTED) {
+                    // A reconnect can be over before this hears of it, and a state that
+                    // was never seen to leave STARTED is still a different core.
+                    if (session != 0L && session != state.startedAt) {
+                        coreClient.stop()
+                        connectionsClient.stop()
+                    }
+                    session = state.startedAt
+                    coreClient.start()
+                } else {
+                    session = 0L
+                    coreClient.stop()
+                }
                 // The connections subscription cannot be made before the core is up,
                 // and a screen that subscribed while disconnected would otherwise
                 // never be given one.
@@ -300,14 +325,8 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
             "formatConfig" -> formatConfig(args, result)
             "installedApps" -> installedApps(result)
             "appIcon" -> appIcon(args, result)
-            "closeConnections" -> {
-                connectionsClient.closeAll()
-                result.success(null)
-            }
-            "closeConnection" -> {
-                connectionsClient.close(args as? String ?: "")
-                result.success(null)
-            }
+            "closeConnections" -> answer(result) { connectionsClient.closeAll() }
+            "closeConnection" -> answer(result) { connectionsClient.close(args as? String ?: "") }
             "encryptBackup" -> backup(args, result, encrypt = true)
             "decryptBackup" -> backup(args, result, encrypt = false)
             "copySensitive" -> copySensitive(args as? String, result)
@@ -386,18 +405,12 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
                 AutoStart.setEnabled(activity, args as? Boolean ?: false)
                 result.success(null)
             }
-            "setMode" -> {
-                coreClient.setClashMode(args as? String ?: "Rule")
-                result.success(null)
-            }
+            "setMode" -> answer(result) { coreClient.setClashMode(args as? String ?: "Rule") }
             "forgetServerUsage" -> {
                 (args as? String)?.takeIf { it.isNotEmpty() }?.let { ServerUsage.forget(activity, it) }
                 result.success(null)
             }
-            "urlTest" -> {
-                coreClient.urlTest(args as? String ?: "proxy")
-                result.success(null)
-            }
+            "urlTest" -> answer(result) { coreClient.urlTest(args as? String ?: "proxy") }
             "selectOutbound" -> {
                 @Suppress("UNCHECKED_CAST")
                 val map = args as? Map<String, Any?>
@@ -406,24 +419,46 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
                 if (group == null || outbound == null) {
                     result.error("bad_args", "selectOutbound requires {group, outbound}", null)
                 } else {
-                    coreClient.selectOutbound(group, outbound)
-                    result.success(null)
+                    answer(result) { coreClient.selectOutbound(group, outbound) }
                 }
             }
-            "generateWireGuardKey" -> {
+            // Off the main thread because whichever comes first loads the cores, which
+            // is tens of megabytes of library.
+            "generateWireGuardKey" -> scope.launch {
                 try {
-                    result.success(Libxray.generateWireGuardKeyPair())
+                    result.success(withContext(Dispatchers.IO) { Libxray.generateWireGuardKeyPair() })
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (t: Throwable) {
                     result.error("keygen_failed", t.message ?: t.toString(), null)
                 }
             }
-            "coreVersion" -> result.success(
-                mapOf(
-                    "singBox" to runCatching { Libbox.version() }.getOrDefault("unknown"),
-                    "xray" to runCatching { Libxray.version() }.getOrDefault("unknown"),
-                ),
-            )
+            "coreVersion" -> scope.launch {
+                result.success(
+                    withContext(Dispatchers.IO) {
+                        mapOf(
+                            "singBox" to runCatching { Libbox.version() }.getOrDefault("unknown"),
+                            "xray" to runCatching { Libxray.version() }.getOrDefault("unknown"),
+                        )
+                    },
+                )
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    /** Answers once the core has, with what went wrong if it could not. */
+    private fun answer(result: MethodChannel.Result, work: suspend () -> Unit) {
+        scope.launch {
+            try {
+                work()
+                result.success(null)
+            } catch (e: CancellationException) {
+                // The engine this would answer is going away.
+                throw e
+            } catch (t: Throwable) {
+                result.error("core_call_failed", t.message ?: t.toString(), null)
+            }
         }
     }
 
@@ -657,26 +692,19 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
             return
         }
 
+        val ticket = ++startTicket
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    LibboxRuntime.ensureSetup(activity)
-                    // Reject a broken config here rather than letting the service start,
-                    // fail, and surface as a mystery "disconnected".
-                    Libbox.checkConfig(config)
-                    // Validate Xray's config too, for the same reason: a failure here
-                    // is far clearer than a tunnel that comes up and never carries data.
-                    if (xrayConfig != null) Libxray.test(xrayConfig)
-                    LibboxRuntime.writeConfig(activity, config)
-                    LibboxRuntime.writeXrayConfig(activity, xrayConfig)
-                    // Not validated ahead of time the way Xray's is: the AmneziaWG
-                    // library has no check that stops short of raising the device, and
-                    // raising one here would bind the very socket the service is about
-                    // to want. It fails loudly at start instead.
-                    LibboxRuntime.writeAmneziaConfig(activity, amneziaConfig)
-                    LibboxRuntime.writeAmneziaSocks(activity, amneziaSocks.takeIf { amneziaConfig != null })
-                    // With the files it describes, so the two cannot disagree.
-                    AppPrefs.rememberConfigVersion(activity, (map["configVersion"] as? Number)?.toInt() ?: 0)
+                startLock.withLock {
+                    if (ticket != startTicket) return@withLock
+                    withContext(Dispatchers.IO) {
+                        writeStart(config, xrayConfig, amneziaConfig, amneziaSocks, map["configVersion"])
+                    }
+                }
+                // Disconnected, or asked for another server, while this was checked.
+                if (ticket != startTicket) {
+                    result.success(null)
+                    return@launch
                 }
                 // Remembered so the tile and the boot receiver, which have no Flutter
                 // engine to ask, can label and restart the same profile.
@@ -691,6 +719,7 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
                 AppPrefs.rememberGroupName(activity, map["groupName"] as? String ?: "")
                 val intent = Intent(activity, TrefoilVpnService::class.java)
                     .putExtra(TrefoilVpnService.EXTRA_PROFILE_NAME, profileName)
+                    .putExtra(TrefoilVpnService.EXTRA_REPLACE, map["replace"] as? Boolean ?: false)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     activity.startForegroundService(intent)
                 } else {
@@ -703,7 +732,35 @@ class TrefoilBridge(private val activity: Activity, messenger: BinaryMessenger) 
         }
     }
 
+    /** Checks what is to be run and leaves it where the service looks for it. */
+    private fun writeStart(
+        config: String,
+        xrayConfig: String?,
+        amneziaConfig: String?,
+        amneziaSocks: AmneziaRuntime.Socks?,
+        configVersion: Any?,
+    ) {
+        LibboxRuntime.ensureSetup(activity)
+        // Reject a broken config here rather than letting the service start, fail, and
+        // surface as a mystery "disconnected".
+        Libbox.checkConfig(config)
+        // Validate Xray's config too, for the same reason: a failure here is far
+        // clearer than a tunnel that comes up and never carries data.
+        if (xrayConfig != null) Libxray.test(xrayConfig)
+        LibboxRuntime.writeConfig(activity, config)
+        LibboxRuntime.writeXrayConfig(activity, xrayConfig)
+        // Not validated ahead of time the way Xray's is: the AmneziaWG library has no
+        // check that stops short of raising the device, and raising one here would bind
+        // the very socket the service is about to want. It fails loudly at start
+        // instead.
+        LibboxRuntime.writeAmneziaConfig(activity, amneziaConfig)
+        LibboxRuntime.writeAmneziaSocks(activity, amneziaSocks.takeIf { amneziaConfig != null })
+        // With the files it describes, so the two cannot disagree.
+        AppPrefs.rememberConfigVersion(activity, (configVersion as? Number)?.toInt() ?: 0)
+    }
+
     private fun stop(result: MethodChannel.Result) {
+        startTicket++
         val intent = Intent(activity, TrefoilVpnService::class.java).setAction(TrefoilVpnService.ACTION_STOP)
         // Plain startService: the service is already foreground, and a stop must not
         // fail on the background-start restrictions that startForegroundService applies.

@@ -31,11 +31,11 @@ object AutoStart {
      * Whether the user currently wants the tunnel up.
      *
      * Distinct from [isEnabled], which is the "connect on boot" preference. This one
-     * is the live intent, and it exists for one narrow case: Android recreates a
-     * killed sticky service with no intent, and without this a kill that landed
-     * during a disconnect would bring back the tunnel the user had just switched off.
-     * Written on both edges rather than inferred, because inferring it means guessing
-     * at what a missing intent meant.
+     * is the live intent, for whatever brings a tunnel back after the process has gone
+     * -- a sticky restart, which arrives with no intent, [Revival], an update. Without
+     * it a kill that landed during a disconnect would bring back the tunnel the user had
+     * just switched off. Written on both edges rather than inferred, because inferring
+     * it means guessing at what a missing intent meant.
      */
     fun isDesired(context: Context): Boolean = prefs(context).getBoolean(KEY_DESIRED, false)
 
@@ -74,7 +74,7 @@ object AutoStart {
 }
 
 /**
- * Reconnects after a reboot.
+ * Reconnects after a reboot, and after an update that cut a running tunnel short.
  *
  * Android 12+ restricts starting a foreground service from the background, and the
  * exemptions differ by version and vendor, so this is best-effort by design: a
@@ -92,8 +92,12 @@ class BootReceiver : BroadcastReceiver() {
         // A placed widget keeps the tap PendingIntent it was last drawn with. After an
         // update that one may point somewhere the new version no longer answers, so
         // redraw before anything else -- whether or not auto-connect is on.
-        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) TrefoilWidgetProvider.refresh(context)
-        if (!AutoStart.isEnabled(context)) return
-        AutoStart.startIfPossible(context)
+        val replaced = intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
+        if (replaced) TrefoilWidgetProvider.refresh(context)
+        // An update ends the tunnel with the process, and whoever had it up did not ask
+        // for that. After a reboot the preference alone decides.
+        if (AutoStart.isEnabled(context) || (replaced && AutoStart.isDesired(context))) {
+            AutoStart.startIfPossible(context)
+        }
     }
 }

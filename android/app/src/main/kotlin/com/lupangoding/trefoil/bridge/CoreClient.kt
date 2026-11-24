@@ -1,6 +1,7 @@
 package com.lupangoding.trefoil.bridge
 
 import android.content.Context
+import com.lupangoding.trefoil.core.CoreCalls
 import io.nekohasekai.libbox.CommandClient
 import io.nekohasekai.libbox.CommandClientHandler
 import io.nekohasekai.libbox.CommandClientOptions
@@ -11,13 +12,12 @@ import io.nekohasekai.libbox.OutboundGroupItemIterator
 import io.nekohasekai.libbox.OutboundGroupIterator
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.libbox.StringIterator
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Reads live status and logs out of the running core.
  *
- * The core does not push into the UI directly. It hosts a command server on
- * loopback, and this client subscribes to it — the same path sing-box's own clients
+ * The core does not push into the UI directly. It hosts a command server on a socket
+ * of its own, and this client subscribes to it — the same path sing-box's own clients
  * use. Going through the documented channel rather than touching the service object
  * means the core can later move to its own process without the UI noticing.
  *
@@ -33,12 +33,22 @@ class CoreClient(
     private val onConnectedChange: (Boolean) -> Unit,
 ) : CommandClientHandler {
 
+    @Volatile
     private var client: CommandClient? = null
-    private val running = AtomicBoolean(false)
+    private val lane = CoreCalls.Lane()
 
-    /** [intervalSeconds] is how often the core reports; see AppPrefs. */
-    fun start(intervalSeconds: Int = 1) {
-        if (!running.compareAndSet(false, true)) return
+    /**
+     * [intervalSeconds] is how often the core reports; see AppPrefs.
+     *
+     * Returns at once, as [stop] does: connecting waits for the core to answer, and
+     * the callers are the main thread and the core's own callbacks.
+     */
+    fun start(intervalSeconds: Int = 1) = lane.post { open(intervalSeconds) }
+
+    fun stop() = lane.post { close() }
+
+    private fun open(intervalSeconds: Int) {
+        if (client != null) return
         val options = CommandClientOptions().apply {
             // Nanoseconds — this is a Go time.Duration.
             statusInterval = intervalSeconds.coerceAtLeast(1) * 1_000_000_000L
@@ -54,14 +64,16 @@ class CoreClient(
         client = c
         // connect() fails whenever the tunnel is down, which is an ordinary state
         // rather than an error: the UI simply shows nothing until the core is up.
-        runCatching { c.connect() }.onFailure { running.set(false) }
+        runCatching { c.connect() }.onFailure { close() }
     }
 
-    fun stop() {
-        if (!running.compareAndSet(true, false)) return
-        runCatching { client?.disconnect() }
+    private fun close() {
+        val c = client ?: return
         client = null
+        runCatching { c.disconnect() }
     }
+
+    private fun connectedClient(): CommandClient = client ?: error("The tunnel is not running")
 
     // ---- CommandClientHandler --------------------------------------------
 
@@ -114,14 +126,11 @@ class CoreClient(
     }
 
     /** Measures every member of a group. Results arrive through [writeGroups]. */
-    fun urlTest(groupTag: String) {
-        runCatching { client?.urlTest(groupTag) }
-    }
+    suspend fun urlTest(groupTag: String) = CoreCalls.call { connectedClient().urlTest(groupTag) }
 
     /** Switches the active server without restarting the tunnel. */
-    fun selectOutbound(groupTag: String, outboundTag: String) {
-        runCatching { client?.selectOutbound(groupTag, outboundTag) }
-    }
+    suspend fun selectOutbound(groupTag: String, outboundTag: String) =
+        CoreCalls.call { connectedClient().selectOutbound(groupTag, outboundTag) }
 
     /**
      * Switches the quick routing mode.
@@ -129,9 +138,7 @@ class CoreClient(
      * No reconnect: the rules for every mode are already in the running config, and
      * only which of them matches changes.
      */
-    fun setClashMode(mode: String) {
-        runCatching { client?.setClashMode(mode) }
-    }
+    suspend fun setClashMode(mode: String) = CoreCalls.call { connectedClient().setClashMode(mode) }
 
     // Not subscribed to; required by the interface.
     override fun initializeClashMode(modes: StringIterator?, currentMode: String?) {

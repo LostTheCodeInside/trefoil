@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LostTheCodeInside/trefoil/cores/libamnezia/netstack"
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
-	"github.com/LostTheCodeInside/trefoil/cores/libamnezia/netstack"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/protocol/socks"
@@ -75,7 +75,7 @@ func TestLoopbackTunnel(t *testing.T) {
 					"[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\nEndpoint = 127.0.0.1:%d\n",
 				client.b64, clientAddr, shape.iface, server.pubB64, serverAddr, endpoint,
 			)
-			if err := Start(conf, socksPort, testUser, testPass, noProtection{}, quietLogger{}); err != nil {
+			if err := Start(conf, socksPort, testUser, testPass, noProtection{}, nil, quietLogger{}); err != nil {
 				t.Fatalf("start: %v", err)
 			}
 			defer Stop()
@@ -271,4 +271,5 @@ func newKeypair(t *testing.T) keys {
 
 type quietLogger struct{}
 
-func (quietLogger) Log(string) {}
+func (quietLogger) Log(string)    {}
+func (quietLogger) Verbose() bool { return false }

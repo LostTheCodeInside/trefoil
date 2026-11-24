@@ -28,7 +28,7 @@ func TestThroughput(t *testing.T) {
 	}
 	conf, _ := os.ReadFile(path)
 	const port = 18094
-	if err := Start(string(conf), port, testUser, testPass, noProtection{}, testLogger{t}); err != nil {
+	if err := Start(string(conf), port, testUser, testPass, noProtection{}, nil, testLogger{t}); err != nil {
 		t.Fatal(err)
 	}
 	defer Stop()

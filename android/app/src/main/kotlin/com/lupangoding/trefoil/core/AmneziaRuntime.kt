@@ -2,9 +2,12 @@ package com.lupangoding.trefoil.core
 
 import android.net.VpnService
 import android.util.Log
+import com.lupangoding.trefoil.core.UnderlyingResolver.Companion.literalAddress
 import io.nekohasekai.libamnezia.Libamnezia
 import io.nekohasekai.libamnezia.Logger
 import io.nekohasekai.libamnezia.Protector
+import io.nekohasekai.libamnezia.Resolver
+import java.net.UnknownHostException
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -88,11 +91,33 @@ object AmneziaRuntime {
      * writes by default — so a tunnel that would not come up had nothing to say about
      * why, from either side of the boundary. Under its own tag so it can be read
      * without the rest of the app's noise: `adb logcat -s AmneziaWG`.
+     *
+     * Every packet it handles is worth a line to it, and each line crosses the binding
+     * whether or not anyone reads it. Those are left out unless debugging is on;
+     * errors always come through.
      */
-    private object LogcatLogger : Logger {
+    private class LogcatLogger(private val verbose: Boolean) : Logger {
+        override fun verbose(): Boolean = verbose
+
         override fun log(message: String) {
             Log.i("AmneziaWG", message)
         }
+    }
+
+    /**
+     * Finds the server's address on the network underneath.
+     *
+     * Go's own resolver reads `/etc/resolv.conf`, which Android does not have, so a
+     * config naming its server by host never came up at all.
+     */
+    private class ServiceResolver(service: VpnService) : Resolver {
+        private val resolver = UnderlyingResolver(service)
+
+        override fun resolve(host: String): String =
+            resolver.resolve(host)
+                .mapNotNull { it.literalAddress() }
+                .ifEmpty { throw UnknownHostException(host) }
+                .joinToString("\n")
     }
 
     /**
@@ -110,7 +135,8 @@ object AmneziaRuntime {
             socks.username,
             socks.password,
             ServiceProtector(service),
-            LogcatLogger,
+            ServiceResolver(service),
+            LogcatLogger(AppPrefs.debug(service)),
         )
         running.set(true)
     }

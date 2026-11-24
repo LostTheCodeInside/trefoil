@@ -104,14 +104,14 @@
             </intent-filter>
         </service>
 
-        <!-- Best-effort reconnect after a reboot; see AutoStart for why it cannot be
-             a guarantee on Android 12+. -->
         <!-- Install results for the in-app updater. Not exported: only the system,
              holding this app's pending intent, can deliver to it. -->
         <receiver
             android:name=".core.UpdateStatusReceiver"
             android:exported="false" />
 
+        <!-- Best-effort reconnect after a reboot; see AutoStart for why it cannot be
+             a guarantee on Android 12+. -->
         <receiver
             android:name=".core.BootReceiver"
             android:enabled="true"
@@ -121,6 +121,12 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- The tunnel's way back after a kill. Not exported: only the alarm it sets for
+             itself, which runs as this app. -->
+        <receiver
+            android:name=".core.RevivalReceiver"
+            android:exported="false" />
 
         <!-- Home screen widget. Exported because the system delivers its updates;
              which is exactly why the tap does not land here (see below). -->

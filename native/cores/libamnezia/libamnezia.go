@@ -16,6 +16,7 @@
 package libamnezia
 
 import (
+	"container/list"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -27,9 +28,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LostTheCodeInside/trefoil/cores/libamnezia/netstack"
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
-	"github.com/LostTheCodeInside/trefoil/cores/libamnezia/netstack"
 
 	std_bufio "bufio"
 	"time"
@@ -57,11 +58,40 @@ type Protector interface {
 // say about why, from either side of the boundary.
 type Logger interface {
 	Log(message string)
+	// Verbose says whether to carry the device's running commentary as well as its
+	// errors. It names peers and narrates every handshake, which is what one wants
+	// while looking for a fault and not what belongs in every bug report.
+	Verbose() bool
+}
+
+// Resolver looks a hostname up outside the tunnel.
+//
+// An Endpoint may be a name, and the device only takes an address. The lookup has to
+// happen on the network underneath: asked through the tunnel, the answer would be
+// needed before the tunnel it is for could carry the question.
+type Resolver interface {
+	// Resolve returns the host's addresses, one per line.
+	Resolve(host string) (string, error)
 }
 
 // A SOCKS association with nothing flowing through it is a leak; sing-box's own
 // inbound uses five minutes for the same reason.
 const udpTimeout = 5 * time.Minute
+
+// How long a client has to get through the SOCKS handshake, and how many may be doing
+// so at once. sing-box is on the other end of a loopback socket and is done within
+// milliseconds; anything slower is a connection somebody opened and left.
+const (
+	handshakeTimeout = 10 * time.Second
+	maxHandshakes    = 256
+)
+
+// The wait between attempts to look up an endpoint's name. A phone that connects at
+// boot is often online only some seconds later.
+const (
+	firstResolveDelay = time.Second
+	maxResolveDelay   = 30 * time.Second
+)
 
 // Used only when the config names no resolver of its own. Two, from different
 // operators, so one being unreachable from a given exit is not the end of it.
@@ -78,6 +108,7 @@ var (
 type instance struct {
 	dev      *device.Device
 	listener net.Listener
+	server   *socksServer
 	cancel   context.CancelFunc
 	// The userspace stack, kept so a test in this package can reach past the SOCKS
 	// server and ask the tunnel itself whether it is carrying anything.
@@ -122,7 +153,12 @@ func Stats() string {
 // the device, so without them any app -- including one the user excluded from the
 // VPN -- could send traffic through the tunnel and learn the server it exits from.
 // Both empty serves without authentication, which only a test should ask for.
-func Start(conf string, socksPort int, username string, password string, protector Protector, logger Logger) error {
+//
+// resolver may be nil, in which case the system's is used.
+func Start(
+	conf string, socksPort int, username string, password string,
+	protector Protector, resolver Resolver, logger Logger,
+) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if current != nil {
@@ -149,10 +185,14 @@ func Start(conf string, socksPort int, username string, password string, protect
 	}
 
 	bind := conn.NewDefaultBind()
-	dev := device.NewDevice(tunDevice, bind, &device.Logger{
-		Verbosef: func(format string, args ...any) { say(format, args...) },
+	log := &device.Logger{
+		Verbosef: device.DiscardLogf,
 		Errorf:   func(format string, args ...any) { say("error: "+format, args...) },
-	})
+	}
+	if logger != nil && logger.Verbose() {
+		log.Verbosef = func(format string, args ...any) { say(format, args...) }
+	}
+	dev := device.NewDevice(tunDevice, bind, log)
 	if err := dev.IpcSet(settings.uapi); err != nil {
 		dev.Close()
 		return fmt.Errorf("configure: %w", err)
@@ -177,12 +217,19 @@ func Start(conf string, socksPort int, username string, password string, protect
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	current = &instance{dev: dev, listener: listener, cancel: cancel, net: tnet}
 	var authenticator *auth.Authenticator
 	if username != "" {
 		authenticator = auth.NewAuthenticator([]auth.User{{Username: username, Password: password}})
 	}
-	go serve(ctx, listener, authenticator, &handler{net: tnet, local: settings.addresses})
+	server := newSocksServer(authenticator, &handler{net: tnet, local: settings.addresses})
+	current = &instance{dev: dev, listener: listener, server: server, cancel: cancel, net: tnet}
+	go server.serve(ctx, listener)
+	if settings.endpointHost != "" {
+		// Not waited for. A lookup that fails is a network that is not there yet, and
+		// this core is often not the one carrying the selected server: holding the
+		// whole connection up for it would fail a tunnel that could have worked.
+		go resolveEndpoint(ctx, dev, settings, resolver, say)
+	}
 	return nil
 }
 
@@ -194,8 +241,63 @@ func Stop() {
 	}
 	current.cancel()
 	_ = current.listener.Close()
+	current.server.close()
 	current.dev.Close()
 	current = nil
+}
+
+// resolveEndpoint gives the peer its address once the endpoint's name has one, and
+// keeps asking until it does or the tunnel is stopped.
+func resolveEndpoint(
+	ctx context.Context, dev *device.Device, settings *settings,
+	resolver Resolver, say func(string, ...any),
+) {
+	for delay := firstResolveDelay; ; delay = min(delay*2, maxResolveDelay) {
+		addr, err := lookupEndpoint(ctx, settings.endpointHost, resolver)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			// update_only: a device being closed has already dropped its peers, and
+			// without it this would add one back.
+			err = dev.IpcSet(fmt.Sprintf(
+				"public_key=%s\nupdate_only=true\nendpoint=%s\n",
+				settings.peerKey, netip.AddrPortFrom(addr, settings.endpointPort),
+			))
+		}
+		if err == nil {
+			return
+		}
+		say("error: the endpoint's name could not be looked up: %v", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+func lookupEndpoint(ctx context.Context, host string, resolver Resolver) (netip.Addr, error) {
+	var answers []string
+	if resolver != nil {
+		lines, err := resolver.Resolve(host)
+		if err != nil {
+			return netip.Addr{}, err
+		}
+		answers = strings.Split(lines, "\n")
+	} else {
+		found, err := net.DefaultResolver.LookupHost(ctx, host)
+		if err != nil {
+			return netip.Addr{}, err
+		}
+		answers = found
+	}
+	for _, answer := range answers {
+		if addr, err := netip.ParseAddr(strings.TrimSpace(answer)); err == nil {
+			return addr.Unmap(), nil
+		}
+	}
+	return netip.Addr{}, errors.New("no usable address")
 }
 
 func IsRunning() bool {
@@ -245,21 +347,140 @@ func protect(bind conn.Bind, protector Protector, say func(string, ...any)) erro
 	return nil
 }
 
-func serve(ctx context.Context, listener net.Listener, authenticator *auth.Authenticator, h *handler) {
+// socksServer accepts what sing-box dials, and bounds what anything else can do here.
+//
+// The port is on loopback, which every app on the device can reach. Credentials keep
+// them out of the tunnel; these limits keep them from being a nuisance on the way to
+// being refused. Connections that are opened and left would otherwise each hold a
+// file descriptor for as long as the process lives, and the process is also the VPN.
+type socksServer struct {
+	authenticator *auth.Authenticator
+	handler       *handler
+
+	mu     sync.Mutex
+	closed bool
+	conns  map[net.Conn]struct{}
+	// Still in the handshake, oldest first.
+	pending *list.List
+}
+
+func newSocksServer(authenticator *auth.Authenticator, handler *handler) *socksServer {
+	return &socksServer{
+		authenticator: authenticator,
+		handler:       handler,
+		conns:         map[net.Conn]struct{}{},
+		pending:       list.New(),
+	}
+}
+
+func (s *socksServer) serve(ctx context.Context, listener net.Listener) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			return
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			// Out of descriptors, most likely. That passes, and a server that had
+			// stopped accepting would not come back when it did.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+			continue
 		}
-		go func() {
-			defer conn.Close()
-			_ = socks.HandleConnectionEx(
-				ctx, conn, std_bufio.NewReader(conn),
-				authenticator, h, h, udpTimeout,
-				M.SocksaddrFromNet(conn.RemoteAddr()), nil,
-			)
-		}()
+		if entry := s.admit(conn); entry != nil {
+			go s.relay(ctx, conn, entry)
+		} else {
+			_ = conn.Close()
+		}
 	}
+}
+
+// admit takes a connection into the handshake, or returns nil once the server has
+// been closed.
+//
+// When too many are in it at once the oldest is dropped rather than the newest. A
+// client that means it is through in milliseconds, so the oldest is the one that is
+// not; refusing the newest instead would let a pile of silent connections lock
+// sing-box out.
+func (s *socksServer) admit(conn net.Conn) *list.Element {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if s.pending.Len() >= maxHandshakes {
+		oldest := s.pending.Front()
+		s.pending.Remove(oldest)
+		_ = oldest.Value.(net.Conn).Close()
+	}
+	s.conns[conn] = struct{}{}
+	return s.pending.PushBack(conn)
+}
+
+// admitted ends a connection's handshake: it is who it says and may stay as long as it
+// likes.
+func (s *socksServer) admitted(conn net.Conn, entry *list.Element) {
+	s.mu.Lock()
+	// Does nothing to an element already removed, so an eviction racing this is fine.
+	s.pending.Remove(entry)
+	s.mu.Unlock()
+	_ = conn.SetDeadline(time.Time{})
+}
+
+func (s *socksServer) forget(conn net.Conn, entry *list.Element) {
+	s.mu.Lock()
+	s.pending.Remove(entry)
+	delete(s.conns, conn)
+	s.mu.Unlock()
+	_ = conn.Close()
+}
+
+func (s *socksServer) relay(ctx context.Context, conn net.Conn, entry *list.Element) {
+	defer s.forget(conn, entry)
+	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	h := &client{handler: s.handler, admitted: func() { s.admitted(conn, entry) }}
+	_ = socks.HandleConnectionEx(
+		ctx, conn, std_bufio.NewReader(conn),
+		s.authenticator, h, h, udpTimeout,
+		M.SocksaddrFromNet(conn.RemoteAddr()), nil,
+	)
+}
+
+// close ends every connection, including the ones that never said anything.
+func (s *socksServer) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	for conn := range s.conns {
+		_ = conn.Close()
+	}
+}
+
+// client is the handler for one connection, which is the only way to learn when that
+// connection has finished its handshake: each of these is called just after.
+type client struct {
+	*handler
+	admitted func()
+}
+
+func (c *client) NewConnectionEx(
+	ctx context.Context, conn net.Conn,
+	source M.Socksaddr, destination M.Socksaddr,
+	onClose N.CloseHandlerFunc,
+) {
+	c.admitted()
+	c.handler.NewConnectionEx(ctx, conn, source, destination, onClose)
+}
+
+// ListenPacket rather than NewPacketConnectionEx: an association is only handed over
+// with its first datagram, which a client may send whenever it likes.
+func (c *client) ListenPacket(
+	listenConfig net.ListenConfig, ctx context.Context, network string, address string,
+) (net.PacketConn, error) {
+	c.admitted()
+	return c.handler.ListenPacket(listenConfig, ctx, network, address)
 }
 
 // handler carries what SOCKS5 accepts into the userspace tunnel.
@@ -415,6 +636,12 @@ type settings struct {
 	dns       []netip.Addr
 	mtu       int
 	uapi      string
+	// Set when the endpoint is a name rather than an address, in which case uapi
+	// carries no endpoint and the peer is given one once the name has been looked up.
+	endpointHost string
+	endpointPort uint16
+	// The peer's public key as UAPI spells it, to name the peer by.
+	peerKey string
 }
 
 // Interface keys that pass through to UAPI unchanged, under a different spelling.
@@ -519,6 +746,7 @@ func parseConf(conf string) (*settings, error) {
 	if err != nil {
 		return nil, fmt.Errorf("peer public key: %w", err)
 	}
+	out.peerKey = public
 	fmt.Fprintf(&uapi, "public_key=%s\n", public)
 	if shared := strings.TrimSpace(peer["presharedkey"]); shared != "" {
 		encoded, err := hexKey(shared)
@@ -532,7 +760,19 @@ func parseConf(conf string) (*settings, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("the config has no Endpoint")
 	}
-	fmt.Fprintf(&uapi, "endpoint=%s\n", endpoint)
+	if address, err := netip.ParseAddrPort(endpoint); err == nil {
+		fmt.Fprintf(&uapi, "endpoint=%s\n", address)
+	} else {
+		host, portText, err := net.SplitHostPort(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: %w", endpoint, err)
+		}
+		port, err := strconv.ParseUint(portText, 10, 16)
+		if err != nil || port == 0 || host == "" {
+			return nil, fmt.Errorf("endpoint %q is not a host and a port", endpoint)
+		}
+		out.endpointHost, out.endpointPort = host, uint16(port)
+	}
 
 	if keepalive := strings.TrimSpace(peer["persistentkeepalive"]); keepalive != "" {
 		fmt.Fprintf(&uapi, "persistent_keepalive_interval=%s\n", keepalive)

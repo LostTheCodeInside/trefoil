@@ -2,6 +2,7 @@ package com.lupangoding.trefoil.core
 
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.zip.GZIPOutputStream
 import javax.crypto.Cipher
@@ -34,21 +35,41 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class BackupCryptoTest {
 
+    /**
+     * Stands in for Argon2id, whose implementation is native and is tested where it
+     * lives. All that matters here is that it depends on both of what it is given.
+     */
+    private fun standIn(password: ByteArray, salt: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").run {
+            update(salt)
+            digest(password)
+        }
+
+    private fun encrypt(plaintext: String, password: String) =
+        BackupCrypto.encrypt(plaintext, password, ::standIn)
+
+    private fun decrypt(encoded: String, password: String) =
+        BackupCrypto.decrypt(encoded, password, ::standIn)
+
+    private fun gzip(bytes: ByteArray): ByteArray = ByteArrayOutputStream().also { out ->
+        GZIPOutputStream(out).use { it.write(bytes) }
+    }.toByteArray()
+
     private val secret = """{"servers":[{"tag":"tokyo","password":"hunter2"}]}"""
 
     @Test
     fun `round trips the profile it was given`() {
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
-        assertEquals(secret, BackupCrypto.decrypt(sealed, "correct horse"))
+        val sealed = encrypt(secret, "correct horse")
+        assertEquals(secret, decrypt(sealed, "correct horse"))
     }
 
     @Test
     fun `the ciphertext does not carry the plaintext`() {
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
+        val sealed = encrypt(secret, "correct horse")
         // The obvious failure mode for a format like this is a stage that quietly
         // does nothing, leaving the credentials sitting in the base64.
         val decoded = String(android.util.Base64.decode(sealed, android.util.Base64.DEFAULT))
-        assertTrue("magic missing", decoded.startsWith("THR2"))
+        assertTrue("magic missing", decoded.startsWith("THR3"))
         assertTrue("plaintext leaked", !decoded.contains("hunter2"))
         assertTrue("plaintext leaked", !sealed.contains("hunter2"))
     }
@@ -57,41 +78,41 @@ class BackupCryptoTest {
     fun `the same profile and password never produce the same file twice`() {
         // A fresh salt and IV each time. Reusing an IV under one key is the single
         // way to break GCM outright, and it would be invisible from the outside.
-        val first = BackupCrypto.encrypt(secret, "correct horse")
-        val second = BackupCrypto.encrypt(secret, "correct horse")
+        val first = encrypt(secret, "correct horse")
+        val second = encrypt(secret, "correct horse")
         assertNotEquals(first, second)
     }
 
     @Test
     fun `a wrong password is refused`() {
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
+        val sealed = encrypt(secret, "correct horse")
         assertThrows(BackupCrypto.WrongPassword::class.java) {
-            BackupCrypto.decrypt(sealed, "correct hors")
+            decrypt(sealed, "correct hors")
         }
     }
 
     @Test
     fun `one flipped byte is refused`() {
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
+        val sealed = encrypt(secret, "correct horse")
         val packed = android.util.Base64.decode(sealed, android.util.Base64.DEFAULT)
         // Last byte, which is inside the GCM tag.
         packed[packed.size - 1] = (packed[packed.size - 1].toInt() xor 0x01).toByte()
         val tampered = android.util.Base64.encodeToString(packed, android.util.Base64.NO_WRAP)
         assertThrows(BackupCrypto.WrongPassword::class.java) {
-            BackupCrypto.decrypt(tampered, "correct horse")
+            decrypt(tampered, "correct horse")
         }
     }
 
     @Test
     fun `a flipped byte in the body is refused too`() {
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
+        val sealed = encrypt(secret, "correct horse")
         val packed = android.util.Base64.decode(sealed, android.util.Base64.DEFAULT)
         // Just past the magic, salt and IV: the first byte of ciphertext.
         val bodyStart = 4 + 16 + 12
         packed[bodyStart] = (packed[bodyStart].toInt() xor 0x01).toByte()
         val tampered = android.util.Base64.encodeToString(packed, android.util.Base64.NO_WRAP)
         assertThrows(BackupCrypto.WrongPassword::class.java) {
-            BackupCrypto.decrypt(tampered, "correct horse")
+            decrypt(tampered, "correct horse")
         }
     }
 
@@ -103,52 +124,70 @@ class BackupCryptoTest {
             "just some text, long enough to clear the header".toByteArray(),
             android.util.Base64.NO_WRAP,
         )
-        assertThrows(BackupCrypto.NotABackup::class.java) { BackupCrypto.decrypt(notOurs, "any") }
+        assertThrows(BackupCrypto.NotABackup::class.java) { decrypt(notOurs, "any") }
     }
 
     @Test
     fun `a truncated backup says so, rather than blaming the password`() {
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
+        val sealed = encrypt(secret, "correct horse")
         val packed = android.util.Base64.decode(sealed, android.util.Base64.DEFAULT)
         // Header only: magic, salt and IV, with nothing after them.
         val header = packed.copyOfRange(0, 4 + 16 + 12)
         val short = android.util.Base64.encodeToString(header, android.util.Base64.NO_WRAP)
-        assertThrows(BackupCrypto.NotABackup::class.java) { BackupCrypto.decrypt(short, "any") }
+        assertThrows(BackupCrypto.NotABackup::class.java) { decrypt(short, "any") }
     }
 
     @Test
     fun `an empty password still round trips`() {
-        // Not encouraged, but the UI can reach it, and PBKDF2 with an empty password
-        // is a real derivation rather than an error.
-        val sealed = BackupCrypto.encrypt(secret, "")
-        assertEquals(secret, BackupCrypto.decrypt(sealed, ""))
+        // Not encouraged, but the UI can reach it, and a key derived from an empty
+        // password is a real one rather than an error.
+        val sealed = encrypt(secret, "")
+        assertEquals(secret, decrypt(sealed, ""))
     }
 
     @Test
     fun `a password outside ASCII round trips`() {
         val password = "パスワード🔐café"
-        val sealed = BackupCrypto.encrypt(secret, password)
-        assertEquals(secret, BackupCrypto.decrypt(sealed, password))
+        val sealed = encrypt(secret, password)
+        assertEquals(secret, decrypt(sealed, password))
     }
 
     @Test
-    fun `a backup made by the previous version still opens`() {
+    fun `a backup made by any previous version still opens`() {
         // Every backup ever handed out has to keep working: it may be the only copy
         // of someone's servers.
-        val legacy = seal("THR1", 210_000, secret.toByteArray(), "correct horse", aad = false)
-        assertEquals(secret, BackupCrypto.decrypt(legacy, "correct horse"))
+        val first = seal("THR1", 210_000, secret.toByteArray(), "correct horse", aad = false)
+        assertEquals(secret, decrypt(first, "correct horse"))
+        val second = seal("THR2", 600_000, gzip(secret.toByteArray()), "correct horse", aad = true)
+        assertEquals(secret, decrypt(second, "correct horse"))
+    }
+
+    @Test
+    fun `a wrong password is refused for those too`() {
+        val second = seal("THR2", 600_000, gzip(secret.toByteArray()), "correct horse", aad = true)
+        assertThrows(BackupCrypto.WrongPassword::class.java) { decrypt(second, "correct hors") }
+    }
+
+    @Test
+    fun `a device that cannot derive the key does not blame the password`() {
+        val sealed = encrypt(secret, "correct horse")
+        assertThrows(OutOfMemoryError::class.java) {
+            BackupCrypto.decrypt(sealed, "correct horse") { _, _ -> throw OutOfMemoryError() }
+        }
     }
 
     @Test
     fun `a backup relabelled as the older version does not open`() {
-        // The version is bound into the tag, so it cannot be swapped for the weaker
+        // The version is bound into the tag, so it cannot be swapped for a weaker
         // derivation without the whole file being refused.
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
-        val packed = android.util.Base64.decode(sealed, android.util.Base64.DEFAULT)
-        "THR1".toByteArray().copyInto(packed)
-        val relabelled = android.util.Base64.encodeToString(packed, android.util.Base64.NO_WRAP)
-        assertThrows(BackupCrypto.WrongPassword::class.java) {
-            BackupCrypto.decrypt(relabelled, "correct horse")
+        for (older in listOf("THR1", "THR2")) {
+            val sealed = encrypt(secret, "correct horse")
+            val packed = android.util.Base64.decode(sealed, android.util.Base64.DEFAULT)
+            older.toByteArray().copyInto(packed)
+            val relabelled = android.util.Base64.encodeToString(packed, android.util.Base64.NO_WRAP)
+            assertThrows(BackupCrypto.WrongPassword::class.java) {
+                decrypt(relabelled, "correct horse")
+            }
         }
     }
 
@@ -158,9 +197,9 @@ class BackupCryptoTest {
         val profile = (1..500).joinToString(",", "[", "]") {
             """{"tag":"server $it","type":"vless","server":"edge$it.example.com","uuid":"11111111-2222-3333-4444-555555555555"}"""
         }
-        val sealed = BackupCrypto.encrypt(profile, "correct horse")
+        val sealed = encrypt(profile, "correct horse")
         assertTrue("${sealed.length} >= ${profile.length}", sealed.length < profile.length / 3)
-        assertEquals(profile, BackupCrypto.decrypt(sealed, "correct horse"))
+        assertEquals(profile, decrypt(sealed, "correct horse"))
     }
 
     @Test
@@ -174,7 +213,7 @@ class BackupCryptoTest {
         }.toByteArray()
         val sealed = seal("THR2", 600_000, bomb, "correct horse", aad = true)
         assertThrows(BackupCrypto.NotABackup::class.java) {
-            BackupCrypto.decrypt(sealed, "correct horse")
+            decrypt(sealed, "correct horse")
         }
     }
 
@@ -201,7 +240,7 @@ class BackupCryptoTest {
     @Test
     fun `whitespace around a pasted backup is tolerated`() {
         // Backups travel through chat apps and text editors, which add newlines.
-        val sealed = BackupCrypto.encrypt(secret, "correct horse")
-        assertEquals(secret, BackupCrypto.decrypt("\n  $sealed \n", "correct horse"))
+        val sealed = encrypt(secret, "correct horse")
+        assertEquals(secret, decrypt("\n  $sealed \n", "correct horse"))
     }
 }

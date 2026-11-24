@@ -1,6 +1,7 @@
 package com.lupangoding.trefoil.core
 
 import android.content.Context
+import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -105,6 +106,45 @@ class ServerUsageTest {
         ServerUsage.flush(context)
 
         assertEquals(0, read().length())
+    }
+
+    @Test
+    fun `what arrives before the server is named is counted once it is`() {
+        // The core reports traffic a moment before it reports which server carries it.
+        ServerUsage.observe(context, uplinkTotal = 40, downlinkTotal = 60)
+        ServerUsage.setActive(context, "tokyo")
+        ServerUsage.flush(context)
+
+        assertEquals(100L, totalFor("tokyo"))
+    }
+
+    @Test
+    fun `the next session does not begin under the last one's name`() {
+        ServerUsage.setActive(context, "tokyo")
+        ServerUsage.observe(context, uplinkTotal = 100, downlinkTotal = 100)
+        ServerUsage.reset(context)
+        // A reconnect onto another server, whose first reading comes before its name.
+        ServerUsage.observe(context, uplinkTotal = 5, downlinkTotal = 5)
+        ServerUsage.setActive(context, "osaka")
+        ServerUsage.flush(context)
+
+        assertEquals(200L, totalFor("tokyo"))
+        assertEquals(10L, totalFor("osaka"))
+    }
+
+    @Test
+    fun `a write that fails is made up for by the next`() {
+        ServerUsage.setActive(context, "tokyo")
+        // A directory where the file goes: nothing can be renamed over it.
+        val file = ServerUsage.file(context)
+        file.mkdirs()
+        File(file, "in the way").writeText("")
+        ServerUsage.observe(context, uplinkTotal = 100, downlinkTotal = 100)
+        ServerUsage.flush(context)
+        file.deleteRecursively()
+
+        ServerUsage.flush(context)
+        assertEquals(200L, totalFor("tokyo"))
     }
 
     @Test

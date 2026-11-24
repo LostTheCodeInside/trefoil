@@ -33,5 +33,6 @@ object AppLocale {
         return app.createConfigurationContext(config).also { cached = tag to it }
     }
 
-    fun string(base: Context, @StringRes id: Int): String = context(base).getString(id)
+    fun string(base: Context, @StringRes id: Int, vararg args: Any): String =
+        context(base).let { if (args.isEmpty()) it.getString(id) else it.getString(id, *args) }
 }

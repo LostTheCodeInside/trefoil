@@ -11,6 +11,8 @@ import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.StringRes
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -24,6 +26,7 @@ import io.nekohasekai.libbox.Notification as BoxNotification
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.SystemProxyStatus
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,14 +35,16 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Owns the sing-box core and the Android TUN device for as long as the tunnel is up.
  *
  * Lifecycle, in order:
  *   1. `Libbox.setup` — process-global, must run exactly once before anything else.
- *   2. `CommandServer` — hosts the core and exposes status/log streams on a loopback
- *      port. The UI reads those through a `CommandClient` rather than by reaching
+ *   2. `CommandServer` — hosts the core and exposes status/log streams on a socket
+ *      only this app can open. The UI reads those through a `CommandClient` rather than by reaching
  *      into this object, which is what keeps the door open to moving the core into
  *      its own process later without changing the UI.
  *   3. `startOrReloadService(config)` — actually brings the tunnel up.
@@ -61,6 +66,7 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
      * closed, which is exactly when the notification is the only thing the user can
      * see.
      */
+    @Volatile
     private var statusClient: CoreClient? = null
 
     /**
@@ -70,10 +76,12 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
      * chattiest thing it publishes — so it runs for the notification only when the
      * user has asked for the split, and never merely because the tunnel is up.
      */
+    @Volatile
     private var trafficClient: ConnectionsClient? = null
     private var lastTrafficAt = 0L
 
     /** The reporting interval [statusClient] was started with, so a change can restart it. */
+    @Volatile
     private var statusInterval = 0
 
     /**
@@ -90,6 +98,18 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
     private val stopping = AtomicBoolean(false)
 
     /**
+     * Which tunnel is the current one.
+     *
+     * Every start, replacement, restart and stop takes the next number. Bringing a
+     * tunnel up takes seconds and a supervised restart waits for longer than that, so
+     * whatever is part-way through checks that it still holds the latest before it goes
+     * on, and before it reports anything.
+     */
+    private val generation = AtomicInteger()
+
+    private fun isCurrent(mine: Int) = mine == generation.get() && !stopping.get()
+
+    /**
      * The most recent start command Android has delivered.
      *
      * Kept so a stop can end the service by id rather than unconditionally: a start
@@ -103,14 +123,22 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
      *
      * A tunnel that is up and dead looks exactly like one that is up and idle: the
      * interface exists, the notification says connected, and nothing goes anywhere.
-     * Nothing was watching for that -- the boot receiver covers a reboot, and
-     * [START_STICKY] now covers the process being killed, but neither notices a core
-     * that wedged while the service around it stayed perfectly healthy.
+     * Nothing was watching for that -- the boot receiver covers a reboot, and [Revival]
+     * the process being killed, but neither notices a core that wedged while the service
+     * around it stayed perfectly healthy.
      */
     private val supervisor = Supervisor()
     private var watchdog: Job? = null
+    private var revival: Job? = null
 
-    /** When the core last reported. Zero while it is not expected to. */
+    /**
+     * When the core last reported, on the clock that stops while the device sleeps.
+     * Zero while no report is expected.
+     *
+     * Not the wall clock: that moves when the network corrects it or the user does, and
+     * a tunnel in perfect health was restarted for having been silent since a minute
+     * that never happened. Nor the one that counts sleep, when nothing reports.
+     */
     @Volatile
     private var lastStatusAt = 0L
 
@@ -145,18 +173,28 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         }
         // A second start while one is already up or on its way. Always-on VPN and
         // auto-connect both fire after a reboot or an update, a fraction of a second
-        // apart; starting again on top of the first bound the command server's port
-        // a second time, failed, and took the working tunnel down with it. The caller
-        // only wants the tunnel up, and it is. Still promoted to the foreground, with
-        // what the notification already says: every startForegroundService owes one.
+        // apart; starting again on top of the first took the working tunnel down with
+        // it. Unless the caller means to put another in its place, it only wants the
+        // tunnel up, and it is. Still promoted to the foreground, with what the
+        // notification already says: every startForegroundService owes one.
         val stage = ServiceState.current.stage
         if (!stopping.get() && (stage == TunnelStage.STARTED || stage == TunnelStage.STARTING)) {
-            startForegroundNotification(shownContent ?: NotificationContent(text(R.string.status_connecting), null, null, null))
+            startForegroundNotification(shownContent ?: connectingContent(""))
+            if (intent?.getBooleanExtra(EXTRA_REPLACE, false) == true) {
+                replaceTunnel(intent.getStringExtra(EXTRA_PROFILE_NAME).orEmpty())
+            }
             return START_STICKY
         }
         // Promote to foreground immediately. Android kills a service that calls
         // startForegroundService but does not post its notification within ~5s.
-        startForegroundNotification(NotificationContent(text(R.string.status_connecting), null, null, null))
+        startForegroundNotification(connectingContent(""))?.let { refused ->
+            // Android does not always let an app do this from the background, and says
+            // so by throwing: uncaught, a tunnel that could not come back by itself
+            // became a crash as well.
+            ServiceState.fail(startFailed(refused))
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         noteAlwaysOn()
         // Always-on starts this service from the system, with no extras and often no
         // intent at all. Falling back to the remembered profile is what stops that
@@ -171,11 +209,12 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         }
         val requested = intent?.getStringExtra(EXTRA_PROFILE_NAME).orEmpty()
         startTunnel(requested.ifEmpty { AutoStart.profileName(this) })
-        // Sticky, so a tunnel Android kills under memory pressure comes back on its
-        // own. It is safe to be sticky precisely because every path that ends the
-        // tunnel deliberately -- the user, a failed start, a revoked consent -- calls
-        // stopSelf(), and Android does not recreate a service that stopped itself.
-        // Only a kill brings us back here, and only with the config that was running.
+        // Sticky, so a tunnel Android kills under memory pressure may come back at once;
+        // [Revival] is for when it does not. It is safe to be sticky precisely because
+        // every path that ends the tunnel deliberately -- the user, a failed start, a
+        // revoked consent -- calls stopSelf(), and Android does not recreate a service
+        // that stopped itself. Only a kill brings us back here, and only with the config
+        // that was running.
         //
         // Not START_REDELIVER_INTENT: the recreate arrives with no intent and falls
         // back to the remembered profile above, which is the same thing without
@@ -197,65 +236,125 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
 
     private fun startTunnel(profileName: String) {
         stopping.set(false)
+        val mine = announce(profileName)
+        scope.launch { bringUp(profileName, mine) }
+    }
+
+    /**
+     * Puts another tunnel in place of this one.
+     *
+     * A reconnect, in one step and with the TUN device left open across it. Stopping and
+     * then starting gave the device up in between, and until the new tunnel had one of
+     * its own every app on the phone was on the bare network.
+     *
+     * When the device would be opened differently it is a new one, and Android leaves a
+     * moment between the two that cannot be mended here: shortest for most settings, and
+     * about a second for strict route or the per-app list, which it treats as another VPN.
+     * Only its own "block connections without VPN" covers that.
+     */
+    private fun replaceTunnel(profileName: String) {
+        val mine = announce(profileName)
+        updateNotification(connectingContent(profileName))
+        scope.launch {
+            teardown(holdTun = true)
+            bringUp(profileName, mine)
+        }
+    }
+
+    /** Takes the next generation and says that a tunnel is on its way. */
+    private fun announce(profileName: String): Int {
+        val mine = generation.incrementAndGet()
         // A new tunnel starts on the server it was asked for; the core says otherwise
         // only once it has switched.
         activeServer = null
         AutoStart.setDesired(this, true)
-        ServiceState.update(stage = TunnelStage.STARTING, profileName = profileName, error = null)
-        scope.launch {
-            try {
-                val config = configFile().takeIf { it.isFile }?.readText()
-                    ?: error("No configuration has been saved yet")
+        ServiceState.update(stage = TunnelStage.STARTING, profileName = profileName, clearError = true)
+        return mine
+    }
 
-                // The other cores first, when the selected server needs one: sing-box's
-                // proxy outbound points at their loopback SOCKS inbound, so starting
-                // the other way round leaves a window where the proxy refuses
-                // connections.
-                LibboxRuntime.xrayConfigFile(this@TrefoilVpnService)
-                    .takeIf { it.isFile }
-                    ?.readText()
-                    ?.let { XrayRuntime.start(this@TrefoilVpnService, it) }
-                LibboxRuntime.amneziaConfigFile(this@TrefoilVpnService)
-                    .takeIf { it.isFile }
-                    ?.readText()
-                    ?.let {
-                        AmneziaRuntime.start(
-                            this@TrefoilVpnService,
-                            it,
-                            LibboxRuntime.readAmneziaSocks(this@TrefoilVpnService),
-                        )
-                    }
+    /**
+     * Starts the cores on the config that has been saved. Only ever from [scope], with
+     * nothing running: whatever was has been through [teardown] first.
+     *
+     * Overtaken part-way, it stops where it is. Whoever overtook it has queued a
+     * teardown behind it on this same thread.
+     */
+    private fun bringUp(profileName: String, mine: Int) {
+        if (!isCurrent(mine)) return
+        try {
+            val config = configFile().takeIf { it.isFile }?.readText()
+                ?: error("No configuration has been saved yet")
 
-                LibboxRuntime.ensureSetup(this@TrefoilVpnService)
+            // The other cores first, when the selected server needs one: sing-box's
+            // proxy outbound points at their loopback SOCKS inbound, so starting
+            // the other way round leaves a window where the proxy refuses
+            // connections.
+            LibboxRuntime.xrayConfigFile(this)
+                .takeIf { it.isFile }
+                ?.readText()
+                ?.let { XrayRuntime.start(this, it) }
+            LibboxRuntime.amneziaConfigFile(this)
+                .takeIf { it.isFile }
+                ?.readText()
+                ?.let { AmneziaRuntime.start(this, it, LibboxRuntime.readAmneziaSocks(this)) }
+            if (!isCurrent(mine)) return
 
-                val server = CommandServer(this@TrefoilVpnService, platform)
-                server.start()
-                commandServer = server
-                server.startOrReloadService(config, overrideOptions())
+            LibboxRuntime.ensureSetup(this)
 
-                ServiceState.update(stage = TunnelStage.STARTED, profileName = profileName)
-                acquireWakeLockIfWanted()
-                resetter.start()
-                updateNotification(
-                    NotificationContent(
-                        profileName.ifEmpty { text(R.string.status_connected) },
-                        text(R.string.status_connected),
-                        null,
-                        null,
-                    ),
-                )
-                startStatusUpdates(profileName)
-                startWatchdog(profileName)
-            } catch (t: Throwable) {
-                // A failure here means the tunnel never came up: report it and tear
-                // down rather than sitting in a permanent "starting" state.
-                stopTunnel(t.message ?: t.toString())
+            val server = CommandServer(this, platform)
+            commandServer = server
+            server.start()
+            server.startOrReloadService(config, overrideOptions())
+            // Usually let go already, as the new device replaced it. A config without one
+            // leaves the old in place, with nothing reading from it.
+            platform.releaseHeldTun()
+            if (!isCurrent(mine)) return
+
+            ServiceState.update(stage = TunnelStage.STARTED, profileName = profileName)
+            acquireWakeLockIfWanted()
+            resetter.start()
+            updateNotification(
+                NotificationContent(
+                    profileName.ifEmpty { text(R.string.status_connected) },
+                    text(R.string.status_connected),
+                    null,
+                    null,
+                ),
+            )
+            startStatusUpdates(profileName, mine)
+            startWatchdog(profileName, mine)
+            startRevival()
+        } catch (t: Throwable) {
+            // A failure here means the tunnel never came up: report it and tear
+            // down rather than sitting in a permanent "starting" state.
+            if (isCurrent(mine)) stopTunnel(startFailed(t))
+        }
+    }
+
+    /** Keeps the alarm that would bring this tunnel back from going off. */
+    private fun startRevival() {
+        revival?.cancel()
+        val since = SystemClock.uptimeMillis()
+        revival = scope.launch {
+            var settled = false
+            while (isActive) {
+                Revival.postpone(this@TrefoilVpnService)
+                if (!settled && SystemClock.uptimeMillis() - since >= Revival.SETTLED_MS) {
+                    settled = true
+                    Revival.settled(this@TrefoilVpnService)
+                }
+                delay(Revival.EVERY_MS)
             }
         }
     }
 
+    /** Why a tunnel did not come up, in the user's language and then in the core's words. */
+    private fun startFailed(cause: Throwable): String =
+        AppLocale.string(this, R.string.error_start_failed, cause.message ?: cause.toString())
+
     private fun stopTunnel(error: String?) {
         if (!stopping.compareAndSet(false, true)) return
+        generation.incrementAndGet()
         // A held update would otherwise be posted when the screen comes back on,
         // resurrecting a "connected" notification for a tunnel that is gone.
         synchronized(notificationLock) { heldContent = null }
@@ -266,6 +365,7 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         val stopId = lastStartId
         scope.launch {
             teardown()
+            Revival.cancel(this@TrefoilVpnService)
             // A start that arrived while this was tearing down has already cleared the
             // flag and queued itself behind us on this same single-threaded scope.
             // Finishing the stop from here would report STOPPED over its STARTING,
@@ -289,13 +389,17 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
     /**
      * Everything that has to come down, without deciding what happens next.
      *
-     * Shared by the deliberate stop and the supervised restart, so a restart cannot
-     * drift into tearing down less than a stop does -- which is how a second core
-     * ends up starting on top of a TUN the first one still holds.
+     * Shared by every way a tunnel ends, so that none can drift into tearing down less
+     * than the others do -- which is how a second core ends up starting on top of one
+     * that is still there.
+     *
+     * [holdTun] is for when another tunnel follows at once; see [replaceTunnel].
      */
-    private suspend fun teardown() {
+    private fun teardown(holdTun: Boolean = false) {
         watchdog?.cancel()
         watchdog = null
+        revival?.cancel()
+        revival = null
         lastStatusAt = 0L
         statusClient?.stop()
         statusClient = null
@@ -304,7 +408,8 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         releaseWakeLock()
         resetter.stop()
         // Persist before the counters go away with the session.
-        UsageHistory.reset(this@TrefoilVpnService)
+        UsageHistory.reset(this)
+        ServerUsage.reset(this)
         runCatching { commandServer?.closeService() }
         runCatching { commandServer?.close() }
         commandServer = null
@@ -312,38 +417,37 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         // first would surface as connection errors during a normal disconnect.
         XrayRuntime.stop()
         AmneziaRuntime.stop()
-        platform.closeTun()
+        if (holdTun) platform.holdTun() else platform.closeTun()
     }
 
     /**
      * Brings the tunnel back after the core stopped reporting.
      *
      * Everything here is a guard. The delay is the supervisor's, growing with each
-     * consecutive attempt; the stopping check is repeated after it, because a user
-     * who presses disconnect during the wait must win; and a supervisor that has run
-     * out of attempts ends the tunnel with a message rather than cycling it forever.
+     * consecutive attempt; whether this is still the current tunnel is asked again after
+     * it, because a user who disconnects or reconnects during the wait must win; and a
+     * supervisor that has run out of attempts ends the tunnel with a message rather than
+     * cycling it forever.
+     *
+     * The TUN device stays open throughout. The tunnel is wanted and is coming back, and
+     * traffic that cannot go through it should wait rather than go around. The one that
+     * follows is new all the same: the device may be what went wrong.
      */
     private fun restartTunnel(profileName: String) {
         if (stopping.get()) return
-        val delayMs = supervisor.nextDelayMs(System.currentTimeMillis())
+        val delayMs = supervisor.nextDelayMs(SystemClock.uptimeMillis())
         if (delayMs == null) {
             stopTunnel(text(R.string.error_core_gave_up))
             return
         }
+        val mine = generation.incrementAndGet()
         ServiceState.update(stage = TunnelStage.STARTING, profileName = profileName)
-        updateNotification(
-            NotificationContent(
-                profileName.ifEmpty { text(R.string.status_connecting) },
-                text(R.string.status_connecting),
-                null,
-                null,
-            ),
-        )
+        updateNotification(connectingContent(profileName))
         scope.launch {
-            teardown()
+            teardown(holdTun = true)
+            platform.renewTun()
             delay(delayMs)
-            if (stopping.get()) return@launch
-            startTunnel(profileName)
+            bringUp(profileName, mine)
         }
     }
 
@@ -355,17 +459,17 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
      * nothing. What can be observed is that reports stopped arriving, which is true
      * of every way it can fail.
      */
-    private fun startWatchdog(profileName: String) {
+    private fun startWatchdog(profileName: String, mine: Int) {
         watchdog?.cancel()
-        lastStatusAt = System.currentTimeMillis()
+        lastStatusAt = SystemClock.uptimeMillis()
         watchdog = scope.launch {
             while (isActive) {
                 delay(WATCHDOG_TICK_MS)
-                if (stopping.get()) return@launch
-                if (ServiceState.current.stage != TunnelStage.STARTED) continue
-                val now = System.currentTimeMillis()
+                if (!isCurrent(mine)) return@launch
+                val now = SystemClock.uptimeMillis()
                 if (supervisor.isStale(now, lastStatusAt, statusInterval)) {
-                    restartTunnel(profileName)
+                    // Under the name it goes by now, which a live switch changes.
+                    restartTunnel(activeServer ?: profileName)
                     return@launch
                 }
                 supervisor.onHealthy(now)
@@ -385,21 +489,15 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
 
     override fun onDestroy() {
         // Guard against Android destroying us without an explicit stop.
-        if (!stopping.get()) {
-            watchdog?.cancel()
-            watchdog = null
-            statusClient?.stop()
-            statusClient = null
-            trafficClient?.stop()
-            trafficClient = null
-            releaseWakeLock()
-            resetter.stop()
-            UsageHistory.reset(this)
-            ServerUsage.reset(this)
-            runCatching { commandServer?.closeService() }
-            runCatching { commandServer?.close() }
-            XrayRuntime.stop()
-            AmneziaRuntime.stop()
+        if (!stopping.getAndSet(true)) {
+            generation.incrementAndGet()
+            // On the scope, behind whatever it is in the middle of: torn down from here
+            // at the same moment, a start under way went on building on what had just
+            // been closed. With a limit, because this is the main thread and a core that
+            // has wedged would otherwise take the app with it.
+            runBlocking {
+                withTimeoutOrNull(DESTROY_PATIENCE_MS) { scope.launch { teardown() }.join() }
+            }
             platform.closeTun()
             ServiceState.update(TunnelStage.STOPPED)
         }
@@ -417,7 +515,7 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
     override fun serviceReload() {
         val config = configFile().takeIf { it.isFile }?.readText() ?: return
         runCatching { commandServer?.startOrReloadService(config, overrideOptions()) }
-            .onFailure { stopTunnel(it.message) }
+            .onFailure { stopTunnel(startFailed(it)) }
     }
 
     /** Android has no system-wide proxy an app may set; sing-box handles this via TUN. */
@@ -467,10 +565,7 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
     }
 
     /**
-     * Subscribes to core status and rewrites the notification as throughput changes.
-     *
-     * Rate is whatever the command server publishes (once a second). The notification
-     * is marked only-alert-once, so replacing it this often is silent.
+     * Holds the CPU awake, for who asked for that; see [wakeLock].
      */
     private fun acquireWakeLockIfWanted() {
         if (!AppPrefs.wakeLock(this) || wakeLock != null) return
@@ -490,27 +585,41 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         wakeLock = null
     }
 
-    private fun startStatusUpdates(profileName: String) {
+    /**
+     * Subscribes to core status and rewrites the notification as throughput changes.
+     *
+     * Rate is whatever the command server publishes (once a second). The notification
+     * is marked only-alert-once, so replacing it this often is silent.
+     */
+    private fun startStatusUpdates(profileName: String, mine: Int) {
         statusClient?.stop()
         statusInterval = AppPrefs.notificationIntervalSeconds(this)
         statusClient = CoreClient(
             context = this,
-            onStatus = { status ->
+            onStatus = report@{ status ->
+                // One last report can arrive after the tunnel it is about has gone.
+                if (!isCurrent(mine)) return@report
                 // The watchdog's only evidence that the core is alive.
-                lastStatusAt = System.currentTimeMillis()
+                lastStatusAt = SystemClock.uptimeMillis()
                 UsageHistory.observe(this, status.uplinkTotal, status.downlinkTotal)
                 ServerUsage.observe(this, status.uplinkTotal, status.downlinkTotal)
                 // Read every tick rather than captured once: the user can change it
                 // while the tunnel is running, and the notification is the only thing
                 // they can see at that point.
                 val mode = AppPrefs.notificationSpeed(this)
-                syncTrafficClient(mode)
+                if ((mode == AppPrefs.SPEED_SPLIT) != (trafficClient != null)) {
+                    onScope(mine) { syncTrafficClient(mode) }
+                }
                 // The interval is baked into the subscription, so changing it means
                 // resubscribing. Done here rather than deferred to the next connect,
                 // because a setting that appears to do nothing reads as broken.
                 if (AppPrefs.notificationIntervalSeconds(this) != statusInterval) {
-                    startStatusUpdates(profileName)
-                    return@CoreClient
+                    onScope(mine) {
+                        if (AppPrefs.notificationIntervalSeconds(this) != statusInterval) {
+                            startStatusUpdates(profileName, mine)
+                        }
+                    }
+                    return@report
                 }
                 updateNotification(
                     notificationContent(notificationTitle(activeServer ?: profileName), mode, status),
@@ -520,7 +629,8 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
             // Only to learn which server is carrying traffic: a live switch changes
             // that without restarting anything, so the profile name the tunnel began
             // with stops being the answer.
-            onGroups = { groups ->
+            onGroups = report@{ groups ->
+                if (!isCurrent(mine)) return@report
                 activeServerOf(groups)?.let { active ->
                     ServerUsage.setActive(this, active)
                     if (active != activeServer) {
@@ -533,6 +643,17 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
             onClashMode = {},
             onConnectedChange = {},
         ).also { it.start(statusInterval) }
+    }
+
+    /**
+     * Runs [block] where the tunnel is started and stopped, if it is still the one that
+     * was up when this was asked.
+     *
+     * For what a report from the core decides. Reports arrive on the core's own thread,
+     * and a client started from there could outlive the teardown running beside it.
+     */
+    private fun onScope(mine: Int, block: () -> Unit) {
+        scope.launch { if (isCurrent(mine)) block() }
     }
 
     /**
@@ -722,7 +843,15 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
             .build()
     }
 
-    private fun startForegroundNotification(content: NotificationContent) {
+    private fun connectingContent(profileName: String) = NotificationContent(
+        profileName.ifEmpty { text(R.string.status_connecting) },
+        if (profileName.isEmpty()) null else text(R.string.status_connecting),
+        null,
+        null,
+    )
+
+    /** Null, or why Android would not have it. */
+    private fun startForegroundNotification(content: NotificationContent): Throwable? = runCatching {
         val notification = buildNotification(content)
         synchronized(notificationLock) { shownContent = content }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -730,7 +859,7 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-    }
+    }.exceptionOrNull()?.also { Log.w(TAG, "Not promoted to the foreground", it) }
 
     /**
      * Re-posts the notification, but only when it would actually read differently.
@@ -794,6 +923,11 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         const val ACTION_STOP = "com.lupangoding.trefoil.STOP"
         const val EXTRA_PROFILE_NAME = "profile_name"
 
+        /** Put this tunnel in place of the one that is up, rather than leave that be. */
+        const val EXTRA_REPLACE = "replace"
+
+        private const val TAG = "TrefoilVpnService"
+
         private const val NOTIFICATION_ID = 1
 
         /** The selector and the "fastest" group, as ConfigBuilder names them. */
@@ -802,6 +936,8 @@ class TrefoilVpnService : VpnService(), CommandServerHandler {
         private const val CHANNEL_STATUS = "tunnel_status"
         private const val CHANNEL_CORE = "core_messages"
 
+        /** Short of the five seconds after which Android calls an app unresponsive. */
+        private const val DESTROY_PATIENCE_MS = 3_000L
 
         /**
          * How often the watchdog looks. Well under the shortest staleness threshold,
