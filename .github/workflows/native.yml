@@ -1,0 +1,90 @@
+# The native side: the Go code the cores are bound with, and the Kotlin around the tunnel.
+#
+# Apart from ci.yml because the Kotlin tests compile against libcores.aar, which takes
+# a quarter of an hour to build. It is built when something that goes into it changes,
+# and comes from the cache the rest of the time.
+name: Native
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - native/**
+      - android/**
+      - scripts/build-cores.sh
+      - pubspec.lock
+      - .github/workflows/native.yml
+  pull_request:
+    paths:
+      - native/**
+      - android/**
+      - scripts/build-cores.sh
+      - pubspec.lock
+      - .github/workflows/native.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The toolchain scripts/build-cores.sh pins.
+  GO_VERSION: 1.27.1
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: native/cores
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: native/cores/go.sum
+      - run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - run: go vet ./libamnezia/... ./libkdf ./libruntime ./libxray
+      # -checklinkname=0 as in build-cores.sh: Xray reaches into the net package.
+      - run: go test -race -ldflags=-checklinkname=0 ./libamnezia/... ./libkdf ./libxray
+
+  kotlin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - id: cores
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: android/app/libs/libcores.aar
+          key: libcores-${{ hashFiles('native/cores/**/*.go', '!native/cores/**/*_test.go', 'native/cores/go.mod', 'native/cores/go.sum', 'scripts/build-cores.sh') }}
+      - if: steps.cores.outputs.cache-hit != 'true'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: native/cores/go.sum
+      - if: steps.cores.outputs.cache-hit != 'true'
+        run: ./scripts/build-cores.sh
+        env:
+          SKIP_VERSION_CHECK: 1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+      - run: flutter pub get
+      # Writes the Gradle wrapper and local.properties, which are not in the repository.
+      - run: flutter build apk --config-only
+      - run: ./gradlew --no-daemon :app:testDebugUnitTest
+        working-directory: android

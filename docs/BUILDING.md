@@ -5,10 +5,10 @@ How the app is put together, built, released and tested. The short version is in
 
 ## How the cores fit together
 
-sing-box carries every tunnel. Xray is reached only for servers sing-box cannot run —
-today that means post-quantum REALITY (`pqv` / ML-DSA-65), which sing-box has no
-config field for. Such a server runs inside Xray behind a loopback SOCKS5 inbound
-that sing-box dials as an ordinary proxy outbound, so the TUN, DNS, routing and
+sing-box carries every tunnel. Xray is reached only for servers sing-box cannot run:
+post-quantum REALITY (`pqv` / ML-DSA-65), XHTTP and VLESS encryption, none of which
+sing-box has a config field for. Such a server runs inside Xray behind a loopback SOCKS5
+inbound that sing-box dials as an ordinary proxy outbound, so the TUN, DNS, routing and
 per-app rules stay in one place regardless of which core carries the traffic. That
 inbound takes a fresh port and credentials on every connect, so other apps on the
 device cannot use it.
@@ -19,8 +19,8 @@ Supported share links: `vless://` (incl. REALITY), `vmess://`, `trojan://`, `ss:
 Subscriptions may be a link list, a base64-wrapped one, or a Clash/Meta YAML
 document.
 
-Links carrying `pqv` (post-quantum REALITY) are detected and routed to the Xray core
-automatically; the server list shows which core each server will use.
+Links that need Xray are detected and routed to it automatically; the server list shows
+which core each server will use.
 
 ## Build
 
@@ -86,6 +86,10 @@ release, signed with the local release key, which never leaves the machine:
 Set `RELEASE_CHECK` to a command to have it run on the staged files before anything is
 published; if it fails, the release stops.
 
+The APKs are built in a checkout of `HEAD` at `/tmp/trefoil-release` (`RELEASE_WORK_DIR`
+changes it), because the Dart compiler writes the project's path into the app. An APK
+that still names the home directory is refused.
+
 It needs the GitHub CLI signed in with write access to the repository. A fork that
 publishes its own builds has to change `REPO` and `RELEASE_CERT_SHA256` in that script,
 and `releaseManifestUrl` in `lib/core/app_update.dart`.
@@ -113,11 +117,21 @@ subtly wrong layout.
 
 ## CI
 
-`.github/workflows/ci.yml` runs `flutter analyze` and the test suite on every push and
-pull request. The cores are not built there: producing `libcores.aar` takes around
-fifteen minutes for a change that is almost always Dart.
+`.github/workflows/ci.yml` runs `flutter analyze`, the format check and the Dart tests on
+every push and pull request, without the cores.
+
+`.github/workflows/native.yml` runs when `native/` or `android/` changes: `go vet` and
+the Go tests with the race detector, then the Kotlin unit tests. Those compile against
+`libcores.aar`, which is built once per version of its sources and cached.
+
+The same locally:
+
+```bash
+(cd native/cores && go test -race -ldflags=-checklinkname=0 ./libamnezia/... ./libkdf ./libxray)
+(cd android && ./gradlew :app:testDebugUnitTest)
+```
 
 ## Status
 
-Android only. Both cores, the tunnel and the UI are in place; iOS would need a
-`NetworkExtension` target and an Apple Developer account, and is not started.
+Android only. An iOS version would need a `NetworkExtension` target and an Apple
+Developer account, and is not started.
