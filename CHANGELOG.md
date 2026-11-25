@@ -14,6 +14,8 @@ All notable changes to this project are documented here.
 
 - The speed test times an upload until the server has received it. It used to time how
   fast the buffers on the way filled up, so slow links looked many times faster.
+- The title of the per-app screen is no longer cut off, at any font size, and its mode
+  names no longer break in mid-word. The text in its bar grows as far as the title does.
 
 ## [1.0.1] - 2026-11-24
 

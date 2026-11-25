@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../core/profile/config_builder.dart';
@@ -7,6 +9,7 @@ import '../l10n/app_localizations.dart';
 import '../main.dart';
 import 'app_icon.dart';
 import 'app_shell.dart';
+import 'word_safe_segments.dart';
 
 /// Chooses which apps the tunnel applies to.
 ///
@@ -42,6 +45,11 @@ class _PerAppScreenState extends State<PerAppScreen> {
   /// Play Services, carry real traffic and have to be reachable somehow.
   bool _showSystem = false;
 
+  /// How far the text in the bar grows with the font size chosen on the phone: as far as
+  /// AppBar lets its own title. The bar has to say how tall it is before any of it is
+  /// laid out, so it needs a limit, and the list below has none.
+  static const _largestText = 1.34;
+
   @override
   void initState() {
     super.initState();
@@ -72,8 +80,13 @@ class _PerAppScreenState extends State<PerAppScreen> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final scale = min(MediaQuery.textScalerOf(context).scale(14) / 14, _largestText);
+    // Two lines of label and M3's padding around them.
+    final selectorHeight = 2 * 20 * scale + 16;
     return Scaffold(
       appBar: AppBar(
+        // Both lines of the title, 28 and 16 at the usual font size.
+        toolbarHeight: max(kToolbarHeight, 44 * scale + 1),
         actions: [
           if (_mode != PerAppMode.off)
             PopupMenuButton<void>(
@@ -106,39 +119,45 @@ class _PerAppScreenState extends State<PerAppScreen> {
                 ],
               ),
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(112),
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: SegmentedButton<PerAppMode>(
-                  segments: [
-                    ButtonSegment(value: PerAppMode.off, label: Text(l10n.appsAll)),
-                    ButtonSegment(value: PerAppMode.include, label: Text(l10n.appsOnlyThese)),
-                    ButtonSegment(value: PerAppMode.exclude, label: Text(l10n.appsExceptThese)),
-                  ],
-                  selected: {_mode},
-                  onSelectionChanged: (value) {
-                    setState(() {
-                      _mode = value.first;
+          preferredSize: Size.fromHeight(selectorHeight + 4 + 56 + 12),
+          child: MediaQuery.withClampedTextScaling(
+            maxScaleFactor: _largestText,
+            child: Column(
+              children: [
+                Container(
+                  height: selectorHeight,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: WordSafeSegments<PerAppMode>(
+                    labels: {
+                      PerAppMode.off: l10n.appsAll,
+                      PerAppMode.include: l10n.appsOnlyThese,
+                      PerAppMode.exclude: l10n.appsExceptThese,
+                    },
+                    selected: _mode,
+                    canWrap: true,
+                    onSelected: (mode) {
+                      setState(() {
+                        _mode = mode;
+                        _order = {..._selected};
+                      });
+                      _commit();
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                  child: SearchBar(
+                    hintText: l10n.appsSearch,
+                    leading: const Icon(Icons.search),
+                    onChanged: (value) => setState(() {
+                      _query = value.toLowerCase();
                       _order = {..._selected};
-                    });
-                    _commit();
-                  },
+                    }),
+                  ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                child: SearchBar(
-                  hintText: l10n.appsSearch,
-                  leading: const Icon(Icons.search),
-                  onChanged: (value) => setState(() {
-                    _query = value.toLowerCase();
-                    _order = {..._selected};
-                  }),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
