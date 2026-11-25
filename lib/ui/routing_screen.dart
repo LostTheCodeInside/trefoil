@@ -5,6 +5,7 @@ import '../l10n/app_localizations.dart';
 import 'l10n_ext.dart';
 import '../main.dart';
 import 'app_shell.dart';
+import 'word_safe_segments.dart';
 
 /// Presets and hand-written rules, in the order the core evaluates them.
 class RoutingScreen extends StatelessWidget {
@@ -246,10 +247,14 @@ class _RuleSheetState extends State<_RuleSheet> {
           children: [
             DropdownButtonFormField<RuleMatch>(
               initialValue: _match,
+              isExpanded: true,
               decoration: InputDecoration(labelText: l10n.matchOn),
               items: [
                 for (final match in RuleMatch.values)
-                  DropdownMenuItem(value: match, child: Text(match.label(l10n))),
+                  DropdownMenuItem(
+                    value: match,
+                    child: Text(match.label(l10n), overflow: TextOverflow.ellipsis),
+                  ),
               ],
               onChanged: (value) => _onMatchChanged(value ?? _match),
             ),
@@ -306,16 +311,16 @@ class _RuleSheetState extends State<_RuleSheet> {
                 ),
               ),
             const SizedBox(height: 16),
-            SegmentedButton<RuleAction>(
-              segments: [
+            WordSafeSegments<RuleAction>(
+              labels: {
                 // WARP only appears once an account exists; a rule pointing at an
                 // outbound that is not in the config would stop the tunnel starting.
                 for (final action in RuleAction.values)
-                  if (action != RuleAction.warp || hasWarp)
-                    ButtonSegment(value: action, label: Text(action.label(l10n))),
-              ],
-              selected: {_action},
-              onSelectionChanged: (value) => setState(() => _action = value.first),
+                  if (action != RuleAction.warp || hasWarp) action: action.label(l10n),
+              },
+              selected: _action,
+              onSelected: (value) => setState(() => _action = value),
+              canStack: true,
             ),
             // Which server "Proxy" means for this rule: a site that only works from
             // one country can go through that country's server while everything else

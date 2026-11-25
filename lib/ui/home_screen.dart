@@ -16,6 +16,7 @@ import 'chips.dart';
 import 'connect_button.dart';
 import 'error_text.dart';
 import 'speed_chart.dart';
+import 'word_safe_segments.dart';
 
 /// The connect screen: one control, and enough feedback to tell whether it worked.
 class HomeScreen extends StatelessWidget {
@@ -115,79 +116,22 @@ class _ModeSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final labels = [l10n.modeRule, l10n.modeGlobal, l10n.modeDirect];
-    // On a small phone, or at a large font size, a label stops fitting its third of
-    // the row and broke mid-word ("Langsu / ng"). The icons only repeat the labels,
-    // so they give up their room first, all three together so the segments stay
-    // alike. If the widest label still does not fit, all three are scaled down by
-    // the same amount rather than one of them shrinking on its own.
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final segment = constraints.maxWidth / labels.length;
-        final widest = _widestLabel(context, labels);
-        // M3 puts 12 + 16 of padding around an icon segment, an 18 px icon and an
-        // 8 px gap inside it; 12 a side around a text-only one; and a hairline
-        // between segments.
-        final withIcons = widest <= segment - 55;
-        final room = segment - 26;
-        if (withIcons || widest <= room) return _buttons(context, labels, withIcons);
-
-        final scaler = MediaQuery.textScalerOf(context);
-        final shrunk = TextScaler.linear(scaler.scale(14) / 14 * room / widest);
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(textScaler: shrunk),
-          child: Builder(builder: (context) => _buttons(context, labels, false)),
-        );
+    return WordSafeSegments<String>(
+      labels: {
+        ConfigBuilder.modeRule: l10n.modeRule,
+        ConfigBuilder.modeGlobal: l10n.modeGlobal,
+        ConfigBuilder.modeDirect: l10n.modeDirect,
       },
-    );
-  }
-
-  static double _widestLabel(BuildContext context, List<String> labels) {
-    final style = Theme.of(context).textTheme.labelLarge;
-    final scaler = MediaQuery.textScalerOf(context);
-    var widest = 0.0;
-    for (final label in labels) {
-      final painter = TextPainter(
-        text: TextSpan(text: label, style: style),
-        textDirection: Directionality.of(context),
-        textScaler: scaler,
-        maxLines: 1,
-      )..layout();
-      if (painter.width > widest) widest = painter.width;
-      painter.dispose();
-    }
-    return widest;
-  }
-
-  Widget _buttons(BuildContext context, List<String> labels, bool withIcons) {
-    Widget label(String text) =>
-        FittedBox(fit: BoxFit.scaleDown, child: Text(text, maxLines: 1, softWrap: false));
-    Widget? icon(IconData data) => withIcons ? Icon(data, size: 18) : null;
-
-    return SegmentedButton<String>(
-      segments: [
-        ButtonSegment(
-          value: ConfigBuilder.modeRule,
-          label: label(labels[0]),
-          icon: icon(Icons.alt_route),
-        ),
-        ButtonSegment(
-          value: ConfigBuilder.modeGlobal,
-          label: label(labels[1]),
-          icon: icon(Icons.public),
-        ),
-        ButtonSegment(
-          value: ConfigBuilder.modeDirect,
-          label: label(labels[2]),
-          icon: icon(Icons.arrow_forward),
-        ),
-      ],
-      selected: {mode},
-      showSelectedIcon: false,
-      onSelectionChanged: (value) {
+      icons: const {
+        ConfigBuilder.modeRule: Icons.alt_route,
+        ConfigBuilder.modeGlobal: Icons.public,
+        ConfigBuilder.modeDirect: Icons.arrow_forward,
+      },
+      selected: mode,
+      onSelected: (value) {
         final controller = TunnelScope.read(context);
         if (controller.hapticFeedback) HapticFeedback.selectionClick();
-        controller.setMode(value.first);
+        controller.setMode(value);
       },
     );
   }

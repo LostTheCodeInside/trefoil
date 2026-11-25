@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Routing
+
+- The action buttons in the rule sheet no longer break a word in two ("Langs-ung"). They
+  drop the check mark first, then shrink a little, and become a list when that is not
+  enough. At the largest font sizes the match field no longer runs off its edge.
+
 ## [1.0.1] - 2026-11-24
 
 ### Cores
