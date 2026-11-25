@@ -58,7 +58,11 @@ class SpeedTest {
   static const defaultUploadUrl = 'https://speed.cloudflare.com/__up';
 
   static const _downloadBytes = 50 * 1024 * 1024;
-  static const _uploadBytes = 10 * 1024 * 1024;
+
+  /// What [upload] sends, one after another over one connection. Growing, so that a slow
+  /// link still gets an answer within the budget and a fast one is measured over enough
+  /// to mean something. The last one answered is the figure.
+  static const _uploadBlocks = [16 * 1024, 128 * 1024, 1024 * 1024, 8 * 1024 * 1024];
 
   static HttpClient _defaultClient() => HttpClient()
     ..connectionTimeout = const Duration(seconds: 10)
@@ -141,63 +145,63 @@ class SpeedTest {
     }
   }
 
-  /// Bits per second, or null when nothing could be sent.
+  /// Bits per second, or null when nothing was delivered.
   ///
-  /// The payload is generated as it goes rather than held in memory: ten megabytes
-  /// of buffer is ten megabytes this app did not need to allocate.
+  /// Timed until the server answers, which it does once it has the whole block. Handing
+  /// the bytes to a socket says nothing: the buffers on the way, the tunnel's own among
+  /// them, take megabytes before the link has carried any of it.
   Future<double?> upload() async {
     final client = openClient();
+    double? rate;
     try {
-      final request = await client.postUrl(Uri.parse(uploadUrl)).timeout(patience);
-      request.headers.contentType = ContentType.binary;
-      // Chunked, rather than a declared length. The budget can stop this early, and a
-      // body shorter than its own Content-Length is a broken request rather than a
-      // short one.
-      request.contentLength = -1;
-
-      final began = DateTime.now();
-      var sent = 0;
-      const chunk = 64 * 1024;
-      final block = Uint8List(chunk);
-      // Not zeroes: a link or a middlebox that compresses would otherwise report a
-      // throughput nothing can reproduce with real data.
-      final random = Random(1);
-      for (var i = 0; i < chunk; i++) {
-        block[i] = random.nextInt(256);
-      }
-
-      var stalled = false;
-      while (sent < _uploadBytes) {
-        final left = budget - DateTime.now().difference(began);
+      // Empty, so this is what a request costs on top of what it carries: the way there
+      // and back, which is latency and has its own figure.
+      final overhead = await _post(client, 0).timeout(patience);
+      final clock = Stopwatch()..start();
+      for (final bytes in _uploadBlocks) {
+        final left = budget - clock.elapsed;
         if (left <= Duration.zero) break;
-        final size = min(chunk, _uploadBytes - sent);
-        request.add(size == chunk ? block : Uint8List.sublistView(block, 0, size));
-        try {
-          // Waits for room in the socket, which on a path that stopped carrying
-          // anything never comes.
-          await request.flush().timeout(left);
-        } on TimeoutException {
-          stalled = true;
-          break;
-        }
-        sent += size;
+        final took = await _post(client, bytes).timeout(left);
+        // Never less than half: the first request may have had a slower way than this.
+        final carrying = took - overhead;
+        rate = _rate(bytes, carrying > took ~/ 2 ? carrying : took ~/ 2);
       }
-      final elapsed = DateTime.now().difference(began);
-      if (stalled) return _rate(sent, elapsed);
-      // Finished properly rather than dropped. The measurement is already taken, and
-      // aborting the socket here shows up at the other end as an error we caused —
-      // bounded, because waiting on a reply is not part of what is being measured.
-      try {
-        final response = await request.close().timeout(const Duration(seconds: 5));
-        await response.drain<void>().timeout(const Duration(seconds: 5));
-      } catch (_) {
-        // The body is sent either way; the reply is not the measurement.
-      }
-      return _rate(sent, elapsed);
     } catch (_) {
-      return null;
+      // Out of time, refused or cut off. What was answered until then still stands.
     } finally {
       client.close(force: true);
+    }
+    return rate;
+  }
+
+  /// Posts [bytes], and how long it took the server to have them and say so. Connecting
+  /// is not part of it.
+  Future<Duration> _post(HttpClient client, int bytes) async {
+    final request = await client.postUrl(Uri.parse(uploadUrl));
+    request.headers.contentType = ContentType.binary;
+    request.contentLength = bytes;
+    final clock = Stopwatch()..start();
+    if (bytes > 0) await request.addStream(_noise(bytes));
+    final response = await request.close();
+    clock.stop();
+    await response.drain<void>();
+    // A refusal can come without anything having been delivered.
+    if (response.statusCode ~/ 100 != 2) throw HttpException('${response.statusCode}');
+    return clock.elapsed;
+  }
+
+  /// [bytes] of payload, made as it goes rather than held in memory.
+  ///
+  /// Not zeroes: a link or a middlebox that compresses would otherwise report a
+  /// throughput nothing can reproduce with real data.
+  static Stream<List<int>> _noise(int bytes) async* {
+    final random = Random(1);
+    final block = Uint8List(64 * 1024);
+    for (var i = 0; i < block.length; i++) {
+      block[i] = random.nextInt(256);
+    }
+    for (var left = bytes; left > 0; left -= block.length) {
+      yield left < block.length ? Uint8List.sublistView(block, 0, left) : block;
     }
   }
 

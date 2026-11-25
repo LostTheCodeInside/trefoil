@@ -10,6 +10,11 @@ All notable changes to this project are documented here.
   drop the check mark first, then shrink a little, and become a list when that is not
   enough. At the largest font sizes the match field no longer runs off its edge.
 
+### App
+
+- The speed test times an upload until the server has received it. It used to time how
+  fast the buffers on the way filled up, so slow links looked many times faster.
+
 ## [1.0.1] - 2026-11-24
 
 ### Cores

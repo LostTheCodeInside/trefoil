@@ -108,7 +108,7 @@ void main() {
     });
 
     test('ends the upload', () async {
-      await impatient().upload().timeout(const Duration(seconds: 5));
+      expect(await impatient().upload().timeout(const Duration(seconds: 5)), isNull);
     });
   });
 
@@ -154,20 +154,82 @@ void main() {
   });
 
   group('upload', () {
-    test('measures what was sent', () async {
+    /// Takes the body at [bytesPerSecond], as a link that slow would deliver it.
+    Future<int> read(HttpRequest request, {int? bytesPerSecond}) async {
+      final clock = Stopwatch()..start();
       var received = 0;
+      await for (final chunk in request) {
+        received += chunk.length;
+        if (bytesPerSecond == null) continue;
+        final due = Duration(microseconds: received * 1000000 ~/ bytesPerSecond);
+        if (due > clock.elapsed) await Future<void>.delayed(due - clock.elapsed);
+      }
+      return received;
+    }
+
+    test('sends all of it and measures it', () async {
+      final received = <int>[];
       serve((request) async {
-        await for (final chunk in request) {
-          received += chunk.length;
-        }
-        request.response.statusCode = 200;
+        received.add(await read(request));
         await request.response.close();
       });
 
       final rate = await testing().upload();
       expect(rate, isNotNull);
       expect(rate, greaterThan(0));
-      expect(received, greaterThan(0));
+      expect(received.first, 0, reason: 'what an empty request costs is not throughput');
+      expect(received.last, 8 * 1024 * 1024);
+    });
+
+    // The buffers of a loopback connection alone take all of it at once, and the figure
+    // was the speed of that: hundreds of megabits for a link that carries eight.
+    test('is the rate of the link, not of the buffers in front of it', () async {
+      serve((request) async {
+        await read(request, bytesPerSecond: 1024 * 1024);
+        await request.response.close();
+      });
+
+      final rate = await testing(budget: const Duration(seconds: 2)).upload();
+      expect(rate, isNotNull);
+      expect(rate, inInclusiveRange(1e6, 17e6), reason: '1 MiB a second is 8.4 Mbps');
+    });
+
+    test('keeps the figure it has when the rest goes unanswered', () async {
+      var requests = 0;
+      serve((request) async {
+        if (++requests > 3) return Completer<void>().future;
+        await read(request);
+        await request.response.close();
+      });
+
+      final clock = Stopwatch()..start();
+      final rate = await testing(budget: const Duration(milliseconds: 700)).upload();
+      expect(rate, isNotNull);
+      expect(clock.elapsed.inSeconds, lessThan(5), reason: 'the budget has to actually stop it');
+    });
+
+    test('is null when the connection is cut on the first block', () async {
+      var requests = 0;
+      serve((request) async {
+        if (++requests > 1) {
+          (await request.response.detachSocket(writeHeaders: false)).destroy();
+          return;
+        }
+        await read(request);
+        await request.response.close();
+      });
+
+      expect(await testing().upload(), isNull);
+    });
+
+    test('is null when the server refuses', () async {
+      serve((request) async {
+        await read(request);
+        request.response.statusCode = 429;
+        await request.response.close();
+      });
+
+      expect(await testing().upload(), isNull);
     });
 
     test('is null when there is nowhere to send it', () async {
