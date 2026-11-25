@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-25
+
 ### Routing
 
 - The action buttons in the rule sheet no longer break a word in two ("Langs-ung"). They

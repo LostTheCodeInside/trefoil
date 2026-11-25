@@ -5,7 +5,7 @@ publish_to: 'none'
 
 # <versionName>+<versionCode>. scripts/release.sh refuses a build number that is not
 # higher than the published one.
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.13.0
